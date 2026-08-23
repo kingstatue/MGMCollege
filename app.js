@@ -2088,19 +2088,31 @@ function normalizeHistoryDate(val) {
     }
     const s = String(val).trim();
     if (!s) return '';
-    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+    const isoMatch = s.match(/^(\d{4})[\/\.-](\d{1,2})[\/\.-](\d{1,2})/);
+    if (isoMatch) {
+        const yIso = isoMatch[1];
+        const mIso = String(parseInt(isoMatch[2], 10)).padStart(2, '0');
+        const dIso = String(parseInt(isoMatch[3], 10)).padStart(2, '0');
+        return yIso + '-' + mIso + '-' + dIso;
+    }
     const parts = s.split(/[\sT]+/)[0].split(/[\/\.-]/);
     if (parts.length === 3) {
         const p0 = parseInt(parts[0], 10);
         const p1 = parseInt(parts[1], 10);
         const p2 = parseInt(parts[2], 10);
-        if (p2 > 1000) {
+
+        let yr = p2;
+        if (yr < 100) yr += 2000;
+        if (yr > 1900 && yr < 2100) {
             const day = (p1 > 12 && p0 <= 12) ? p1 : p0;
             const month = (p1 > 12 && p0 <= 12) ? p0 : p1;
-            return p2 + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+            return yr + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
         }
-        if (p0 > 1000) {
-            return p0 + '-' + String(p1).padStart(2, '0') + '-' + String(p2).padStart(2, '0');
+
+        let yr0 = p0;
+        if (yr0 < 100) yr0 += 2000;
+        if (yr0 > 1900 && yr0 < 2100) {
+            return yr0 + '-' + String(p1).padStart(2, '0') + '-' + String(p2).padStart(2, '0');
         }
     }
     const parsed = new Date(s);
@@ -2518,6 +2530,86 @@ function fetchTodayServerHistory() {
     document.body.appendChild(scriptEl);
 }
 
+function fetchFullSheetHistory(stream = currentDept || 'BCA') {
+    const targetUrl = getWebhookUrl(stream);
+    if (!targetUrl) return;
+    const cbName = 'mgm_history_full_cb_' + Date.now();
+
+    window[cbName] = function (data) {
+        try { delete window[cbName]; } catch (e) {}
+
+        if (data && data.result === 'success' && Array.isArray(data.entries)) {
+            const serverEntries = data.entries.map(e => ({
+                stream: (stream || 'BCA').toUpperCase(),
+                date: normalizeHistoryDate(e.date) || getTodayISOString(),
+                year: e.year || 'First Year',
+                section: e.section || 'A',
+                subject: e.subject || 'Subject',
+                slot: parseInt(e.slot, 10) || 1,
+                rollNumbers: e.rollNumbers || 'NIL',
+                offline: false,
+                syncNote: '',
+                timestamp: 'From Sheet'
+            }));
+
+            const history = readAllHistory();
+            const byKey = new Map();
+
+            // Keep offline queue + entries from OTHER streams
+            history.forEach(item => {
+                const k = historyMatchKey(item);
+                if (item.offline === true) {
+                    byKey.set(k, item);
+                    return;
+                }
+                const itemStream = item.stream || 'BCA';
+                if (!isStreamMatch(itemStream, stream)) {
+                    byKey.set(k, item);
+                }
+            });
+
+            // Sheet is absolute source of truth for this stream
+            serverEntries.forEach(sEntry => {
+                const k = historyMatchKey(sEntry);
+                byKey.set(k, sEntry);
+            });
+
+            const merged = compactAttendanceHistory(Array.from(byKey.values()));
+            saveHistoryToLocalStorage(merged);
+            renderHistoryList();
+            updateSyncButtonState();
+            showCustomToast('🔄 Synced with Sheet!', `Loaded ${serverEntries.length} active entries from Google Sheet.`);
+        } else if (data && (data.error === 'Unauthorized' || data.result === 'error')) {
+            showCustomToast('⚠️ Sheet Sync Failed', data.message || 'Passcode unauthorized or sheet error.');
+        }
+    };
+
+    const params = new URLSearchParams({
+        action: 'get_absentees',
+        stream: stream,
+        date: 'ALL',
+        callback: cbName
+    });
+    appendAuthToParams(params);
+
+    const scriptEl = document.createElement('script');
+    scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+    scriptEl.onerror = function () {
+        try { delete window[cbName]; } catch (e) {}
+    };
+    document.body.appendChild(scriptEl);
+}
+
+function clearLocalHistoryCache() {
+    if (confirm("Clear local browser history cache?\n\nThis will remove local cached entries and reload fresh entries directly from Google Sheet.")) {
+        try { localStorage.removeItem('mgm_attendance_history'); } catch (e) {}
+        try { localStorage.removeItem('mgm_bca_attendance_history'); } catch (e) {}
+        showCustomToast('🧹 Local Cache Cleared!', 'Fetching fresh entries from Google Sheet...');
+        fetchFullSheetHistory();
+        renderHistoryList();
+    }
+}
+
 /** Optional slot greying — must never throw or Today/History list stays empty. */
 function refreshAllSlotDropdowns() {
     try {
@@ -2707,6 +2799,153 @@ function startVisualizer() {
 function stopVisualizer() {
     if (animationFrameId) cancelAnimationFrame(animationFrameId);
     if (canvasCtx && canvas) canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function updateBulkSubjectDropdown() {
+    const bYear = document.getElementById('bulkYearSelect');
+    const bSec = document.getElementById('bulkSectionSelect');
+    const bSubj = document.getElementById('bulkSubjectInput');
+    if (bYear && bSec && bSubj) {
+        const yrVal = bYear.value || 'Second Year';
+        const secVal = bSec.value || 'A';
+        const list = getSubjectsForActiveYear(currentDept, yrVal, secVal);
+        bSubj.innerHTML = list.map(s => `<option value="${escapeHTML(s)}">${escapeHTML(s)}</option>`).join('');
+    }
+}
+
+function openBulkGeneratorModal() {
+    const modal = document.getElementById('bulkGeneratorModal');
+    if (!modal) return;
+    updateBulkSubjectDropdown();
+    modal.classList.add('active');
+}
+
+function closeBulkGeneratorModal() {
+    const modal = document.getElementById('bulkGeneratorModal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function executeBulkPastGenerator() {
+    const yearEl = document.getElementById('bulkYearSelect');
+    const secEl = document.getElementById('bulkSectionSelect');
+    const subjEl = document.getElementById('bulkSubjectInput');
+    const slotEl = document.getElementById('bulkSlotSelect');
+    const startEl = document.getElementById('bulkStartDate');
+    const endEl = document.getElementById('bulkEndDate');
+
+    const yearVal = yearEl ? yearEl.value : '';
+    const secVal = secEl ? secEl.value : '';
+    const subjVal = subjEl ? subjEl.value : '';
+    const slotVal = slotEl ? slotEl.value : '1';
+    const startVal = startEl ? startEl.value : '';
+    const endVal = endEl ? endEl.value : '';
+    const checkedDays = Array.from(document.querySelectorAll('.bulkDayCheck:checked')).map(c => parseInt(c.value, 10));
+
+    if (!subjVal) {
+        alert('Please select or enter a Subject Name.');
+        return;
+    }
+    if (!startVal || !endVal) {
+        alert('Please select both Start Date and End Date.');
+        return;
+    }
+    if (new Date(startVal) > new Date(endVal)) {
+        alert('Start Date cannot be after End Date.');
+        return;
+    }
+    if (checkedDays.length === 0) {
+        alert('Please select at least one day of the week.');
+        return;
+    }
+
+    const btnText = document.getElementById('submitBulkBtnText');
+    const spinner = document.getElementById('submitBulkSpinner');
+    const submitBtn = document.getElementById('submitBulkBtn');
+
+    if (btnText) btnText.textContent = 'Generating...';
+    if (spinner) spinner.style.display = 'inline-block';
+    if (submitBtn) submitBtn.disabled = true;
+
+    try {
+        const parts1 = startVal.split('-');
+        const parts2 = endVal.split('-');
+        const startDate = new Date(parseInt(parts1[0], 10), parseInt(parts1[1], 10) - 1, parseInt(parts1[2], 10));
+        const endDate = new Date(parseInt(parts2[0], 10), parseInt(parts2[1], 10) - 1, parseInt(parts2[2], 10));
+        
+        const generatedItems = [];
+        const curr = new Date(startDate.getTime());
+
+        while (curr.getTime() <= endDate.getTime()) {
+            const dayOfWeek = curr.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+            if (checkedDays.includes(dayOfWeek)) {
+                const yyyy = curr.getFullYear();
+                const mm = String(curr.getMonth() + 1).padStart(2, '0');
+                const dd = String(curr.getDate()).padStart(2, '0');
+                const dateStr = yyyy + '-' + mm + '-' + dd;
+
+                generatedItems.push({
+                    stream: currentDept || 'BCA',
+                    date: dateStr,
+                    year: yearVal,
+                    section: secVal,
+                    subject: subjVal,
+                    slot: String(parseInt(slotVal, 10) || 1),
+                    rollNumbers: 'NIL',
+                    offline: false,
+                    timestamp: 'Bulk Past Entry'
+                });
+            }
+            curr.setDate(curr.getDate() + 1);
+        }
+
+        if (generatedItems.length === 0) {
+            alert('No matching class days found in the selected date range.');
+            return;
+        }
+
+        // Save all generated past items locally immediately
+        for (const item of generatedItems) {
+            saveToLocalHistory(item);
+        }
+
+        closeBulkGeneratorModal();
+
+        showCustomToast(`⚡ Created ${generatedItems.length} Past Classes!`, `Added for ${yearVal} Sec ${secVal} (${subjVal}). You can now edit absentees.`);
+        renderHistoryList();
+
+        // Perform Google Sheets sync asynchronously in background without freezing UI
+        (async () => {
+            const targetUrl = getWebhookUrl(currentDept);
+            if (!targetUrl) return;
+            for (const item of generatedItems) {
+                const payload = withAuth({
+                    action: 'create',
+                    isUpdate: false,
+                    stream: item.stream,
+                    date: item.date,
+                    rollNumbers: 'NIL',
+                    year: item.year,
+                    section: item.section,
+                    subject: item.subject,
+                    slot: item.slot,
+                    changesSummary: 'Bulk Past Class Entry'
+                });
+                try {
+                    await postWithRetry(targetUrl, payload, 1);
+                } catch (e) {
+                    console.warn('Bulk item sheet sync error:', e);
+                }
+            }
+        })();
+
+    } catch (err) {
+        console.error('Bulk Generator Error:', err);
+        alert('An error occurred while generating past classes.');
+    } finally {
+        if (btnText) btnText.textContent = '⚡ Generate Past Classes';
+        if (spinner) spinner.style.display = 'none';
+        if (submitBtn) submitBtn.disabled = false;
+    }
 }
 
 function updateStatus(msg, type) {
@@ -4158,21 +4397,31 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (submitBtn) submitBtn.addEventListener('click', submitModalForm);
 
-    // Global document event delegation for submit buttons (handles any timing/PWA cache differences)
-    document.addEventListener('click', (e) => {
-        const directBtn = e.target && e.target.closest ? e.target.closest('#directSubmitBtn') : null;
-        if (directBtn) {
+    // Bulk Generator Actions
+    const openBulkBtn = document.getElementById('openBulkGeneratorModalBtn');
+    const closeBulkBtn = document.getElementById('closeBulkModalBtn');
+    const cancelBulkBtn = document.getElementById('cancelBulkModalBtn');
+    const bulkForm = document.getElementById('bulkGeneratorForm');
+    const bulkModal = document.getElementById('bulkGeneratorModal');
+    const bulkYearSelect = document.getElementById('bulkYearSelect');
+    const bulkSectionSelect = document.getElementById('bulkSectionSelect');
+
+    if (openBulkBtn) openBulkBtn.addEventListener('click', openBulkGeneratorModal);
+    if (closeBulkBtn) closeBulkBtn.addEventListener('click', closeBulkGeneratorModal);
+    if (cancelBulkBtn) cancelBulkBtn.addEventListener('click', closeBulkGeneratorModal);
+    if (bulkModal) {
+        bulkModal.addEventListener('click', (e) => {
+            if (e.target === bulkModal) closeBulkGeneratorModal();
+        });
+    }
+    if (bulkYearSelect) bulkYearSelect.addEventListener('change', updateBulkSubjectDropdown);
+    if (bulkSectionSelect) bulkSectionSelect.addEventListener('change', updateBulkSubjectDropdown);
+    if (bulkForm) {
+        bulkForm.addEventListener('submit', (e) => {
             e.preventDefault();
-            submitDirectForm();
-            return;
-        }
-        const modalBtn = e.target && e.target.closest ? e.target.closest('#submitBtn') : null;
-        if (modalBtn) {
-            e.preventDefault();
-            submitModalForm();
-            return;
-        }
-    });
+            executeBulkPastGenerator();
+        });
+    }
 
     // Year / section changes: filter locally only (cloud poll already runs every 12s).
     // Avoid fetchCloudSubjects here — it rebuilt dropdowns mid-interaction and caused screen flash.
@@ -4312,6 +4561,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const syncOfflineBtn = document.getElementById('syncOfflineBtn');
     if (syncOfflineBtn) {
         syncOfflineBtn.addEventListener('click', syncOfflineEntries);
+    }
+
+    const syncSheetHistoryBtn = document.getElementById('syncSheetHistoryBtn');
+    if (syncSheetHistoryBtn) {
+        syncSheetHistoryBtn.addEventListener('click', () => {
+            fetchFullSheetHistory();
+        });
+    }
+
+    const clearHistoryCacheBtn = document.getElementById('clearHistoryCacheBtn');
+    if (clearHistoryCacheBtn) {
+        clearHistoryCacheBtn.addEventListener('click', clearLocalHistoryCache);
     }
 
     window.addEventListener('online', () => {
@@ -4657,7 +4918,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v32.2_mark_all_fields';
+    const APP_VER = 'v67_multistream_sync_fixed';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
         localStorage.setItem('mgm_app_ver', APP_VER);
@@ -4924,7 +5185,7 @@ function fetchHODAbsentees() {
         if (hodFetchSpinner) hodFetchSpinner.style.display = 'none';
         if (hodFetchBtnText) hodFetchBtnText.textContent = '🔄 Fetch Absentees';
         applyLocalFallback('⚠️ Server timeout — showing local entries.');
-    }, 4000);
+    }, 12000);
     const hodStreamSelect = document.getElementById('hodStreamSelect');
     const hodDatePicker = document.getElementById('hodDatePicker');
     const hodFetchBtnText = document.getElementById('hodFetchBtnText');
@@ -4977,6 +5238,9 @@ function fetchHODAbsentees() {
     const cbName = 'hod_callback_' + Date.now();
 
     window[cbName] = function (data) {
+        if (hodDone) return;
+        hodDone = true;
+        clearTimeout(hodTimeout);
         delete window[cbName];
         if (hodFetchBtnText) hodFetchBtnText.textContent = '🔄 Fetch ' + activeLabel + ' Absentees';
         if (hodFetchSpinner) hodFetchSpinner.style.display = 'none';
@@ -5762,6 +6026,59 @@ function initShortageCalculator() {
     if (yearSelect) yearSelect.addEventListener('change', updateDefaultRollRange);
     updateDefaultRollRange();
 
+function sectionsEqualForSubject(sec1, sec2) {
+    if (!sec1 || !sec2) return true;
+    const s1 = normalizeSectionCode(sec1);
+    const s2 = normalizeSectionCode(sec2);
+    if (s1 === s2) return true;
+    if (s1 === 'ALL' || s2 === 'ALL' || s1 === 'COMBINED' || s2 === 'COMBINED') return true;
+    return s1.includes(s2) || s2.includes(s1);
+}
+
+function isSubjectMatching(subj1, subj2) {
+    if (!subj1 || !subj2) return true;
+    if (String(subj2).trim().toUpperCase() === 'ALL') return true;
+    const s1 = String(subj1).trim().toLowerCase();
+    const s2 = String(subj2).trim().toLowerCase();
+    if (s1 === s2) return true;
+    const base1 = extractSubjNameAndSection(s1).name.trim().toLowerCase();
+    const base2 = extractSubjNameAndSection(s2).name.trim().toLowerCase();
+    return base1 === base2 || s1.includes(base2) || s2.includes(base1);
+}
+
+function normalizeRollNumbers(rollInput) {
+    if (!rollInput || rollInput === 'NIL') return [];
+    if (Array.isArray(rollInput)) return rollInput.map(r => String(r).trim()).filter(Boolean);
+    const str = String(rollInput).trim();
+    if (!str || str.toUpperCase() === 'NIL' || str.toUpperCase() === 'NONE') return [];
+    return str.split(/[\s,]+/).map(r => r.trim()).filter(r => Boolean(r) && r.toUpperCase() !== 'NIL');
+}
+
+function buildShortageWhatsAppText(yearStr, sectionStr, subjectFilter, startRoll, endRoll, totalClasses, cutoff, shortageList, periodLabel) {
+    const stream = currentDept || 'BCA';
+    const streamLabel = stream === 'BCM' ? 'B.Com' : (stream === 'BA' ? 'B.A.' : (stream === 'BSC' ? 'B.Sc.' : stream));
+    let msg = `*MGM COLLEGE — ATTENDANCE SHORTAGE REPORT*\n`;
+    msg += `Department: *${streamLabel}*\n`;
+    msg += `Class: *${yearStr} — Sec ${sectionStr}*\n`;
+    msg += `Subject: *${subjectFilter === 'ALL' ? 'All Subjects (Overall)' : subjectFilter}*\n`;
+    msg += `Period: *${periodLabel || 'Cumulative'}*\n`;
+    msg += `Roll Range: *${startRoll} to ${endRoll}*\n`;
+    msg += `Total Classes Conducted: *${totalClasses}*\n`;
+    msg += `Threshold: *Below ${cutoff}%*\n\n`;
+
+    if (!shortageList || shortageList.length === 0) {
+        msg += `🎉 No students below ${cutoff}% attendance threshold.\n`;
+        return msg;
+    }
+
+    msg += `*STUDENTS BELOW ${cutoff}% ATTENDANCE (${shortageList.length}):*\n`;
+    shortageList.forEach((item, idx) => {
+        msg += `${idx + 1}. *Roll ${item.roll}*: *${item.percent}%* (${item.attended}/${item.total} classes, ${item.missed} missed)\n`;
+    });
+
+    return msg.trim();
+}
+
 function fetchServerHistoryForShortage(stream, period, fVal, tVal, callback) {
     const targetUrl = getWebhookUrl(stream || currentDept || 'BCA');
     if (!targetUrl) {
@@ -5786,7 +6103,7 @@ function fetchServerHistoryForShortage(stream, period, fVal, tVal, callback) {
         done = true;
         try { delete window[cbName]; } catch (e) {}
         if (callback) callback();
-    }, 4500);
+    }, 12000);
 
     window[cbName] = function (res) {
         if (done) return;
@@ -5949,137 +6266,144 @@ function parseShortageRollNumbers(sRollStr, eRollStr) {
         const tVal = toDateInput ? toDateInput.value : '';
 
         fetchServerHistoryForShortage(currentDept, period, fVal, tVal, () => {
-            const history = readAllHistory();
-            const now = new Date();
-            const currentMonthStr = getTodayISOString().substring(0, 7); // YYYY-MM
+            try {
+                const history = readAllHistory();
+                const now = new Date();
+                const currentMonthStr = getTodayISOString().substring(0, 7); // YYYY-MM
 
-            let periodLabel = 'All Time (Cumulative)';
-            if (period === 'MONTH') periodLabel = 'This Month (' + currentMonthStr + ')';
-            else if (period === 'WEEK') periodLabel = 'This Week (Last 7 Days)';
-            else if (period === 'CUSTOM') {
-                const fVal = fromDateInput ? fromDateInput.value : '';
-                const tVal = toDateInput ? toDateInput.value : '';
-                periodLabel = 'Custom (' + (fVal || 'Start') + ' to ' + (tVal || 'End') + ')';
-            }
-
-            const matchingSessions = history.filter(item => {
-                const yrMatch = isYearMatching(item.year, yrVal);
-                const secMatch = !item.section || sectionsEqualForSubject(item.section, secVal);
-                const streamMatch = !item.stream || item.stream.toUpperCase() === 'BCA';
-                if (!yrMatch || !secMatch || !streamMatch) return false;
-
-                if (subjFilter !== 'ALL') {
-                    if (!isSubjectMatching(item.subject, subjFilter)) return false;
-                }
-
-                const itemDateStr = normalizeHistoryDate(item.date) || getTodayISOString();
-                if (period === 'MONTH') {
-                    return itemDateStr.substring(0, 7) === currentMonthStr;
-                } else if (period === 'WEEK') {
-                    const itemTime = new Date(itemDateStr).getTime();
-                    const weekAgo = now.getTime() - (7 * 24 * 60 * 60 * 1000);
-                    return !isNaN(itemTime) && itemTime >= weekAgo;
-                } else if (period === 'CUSTOM') {
+                let periodLabel = 'All Time (Cumulative)';
+                if (period === 'MONTH') periodLabel = 'This Month (' + currentMonthStr + ')';
+                else if (period === 'WEEK') periodLabel = 'This Week (Last 7 Days)';
+                else if (period === 'CUSTOM') {
                     const fVal = fromDateInput ? fromDateInput.value : '';
                     const tVal = toDateInput ? toDateInput.value : '';
-                    if (fVal && itemDateStr < fVal) return false;
-                    if (tVal && itemDateStr > tVal) return false;
+                    periodLabel = 'Custom (' + (fVal || 'Start') + ' to ' + (tVal || 'End') + ')';
                 }
-                return true;
-            });
 
-            const rollObjects = parseShortageRollNumbers(sRollStr, eRollStr);
+                const matchingSessions = history.filter(item => {
+                    const yrMatch = isYearMatching(item.year, yrVal);
+                    const secMatch = !item.section || sectionsEqualForSubject(item.section, secVal);
+                    const streamMatch = !item.stream || isStreamMatch(item.stream, currentDept || 'BCA');
+                    if (!yrMatch || !secMatch || !streamMatch) return false;
 
-            const totalConducted = matchingSessions.length;
-            const absenceCountMap = {};
-            const subjectStatsMap = {}; // { roll: { 'Java': { conducted: 10, missed: 2 } } }
+                    if (subjFilter !== 'ALL') {
+                        if (!isSubjectMatching(item.subject, subjFilter)) return false;
+                    }
 
-            rollObjects.forEach(rObj => {
-                absenceCountMap[rObj.code] = 0;
-                subjectStatsMap[rObj.code] = {};
-            });
+                    const itemDateStr = normalizeHistoryDate(item.date) || getTodayISOString();
+                    if (period === 'MONTH') {
+                        return itemDateStr.substring(0, 7) === currentMonthStr;
+                    } else if (period === 'WEEK') {
+                        const itemTime = new Date(itemDateStr).getTime();
+                        const weekAgo = now.getTime() - (7 * 24 * 60 * 60 * 1000);
+                        return !isNaN(itemTime) && itemTime >= weekAgo;
+                    } else if (period === 'CUSTOM') {
+                        const fVal = fromDateInput ? fromDateInput.value : '';
+                        const tVal = toDateInput ? toDateInput.value : '';
+                        if (fVal && itemDateStr < fVal) return false;
+                        if (tVal && itemDateStr > tVal) return false;
+                    }
+                    return true;
+                });
 
-            matchingSessions.forEach(item => {
-                const itemSubj = (item.subject || 'General').trim();
-                const rolls = normalizeRollNumbers(item.rollNumbers);
+                const rollObjects = parseShortageRollNumbers(sRollStr, eRollStr);
+
+                const totalConducted = matchingSessions.length;
+                const absenceCountMap = {};
+                const subjectStatsMap = {}; // { roll: { 'Java': { conducted: 10, missed: 2 } } }
 
                 rollObjects.forEach(rObj => {
-                    if (!subjectStatsMap[rObj.code][itemSubj]) {
-                        subjectStatsMap[rObj.code][itemSubj] = { conducted: 0, missed: 0 };
-                    }
-                    subjectStatsMap[rObj.code][itemSubj].conducted++;
+                    absenceCountMap[rObj.code] = 0;
+                    subjectStatsMap[rObj.code] = {};
                 });
 
-                rolls.forEach(rStr => {
-                    const cleanR = String(rStr).trim().toUpperCase();
-                    const rNum = parseInt(cleanR.replace(/\D/g, ''), 10);
+                matchingSessions.forEach(item => {
+                    const itemSubj = (item.subject || 'General').trim();
+                    const rolls = normalizeRollNumbers(item.rollNumbers);
 
                     rollObjects.forEach(rObj => {
-                        const codeMatch = cleanR === rObj.code;
-                        const numMatch = !isNaN(rNum) && rNum === rObj.num;
-                        
-                        let suffixMatch = false;
-                        if (!isNaN(rNum) && rNum > 0) {
-                            const str1 = String(rNum);
-                            const str2 = String(rObj.num);
-                            if (str1.length >= 2 && str2.length >= 2) {
-                                suffixMatch = str1.endsWith(str2) || str2.endsWith(str1);
-                            }
+                        if (!subjectStatsMap[rObj.code][itemSubj]) {
+                            subjectStatsMap[rObj.code][itemSubj] = { conducted: 0, missed: 0 };
                         }
+                        subjectStatsMap[rObj.code][itemSubj].conducted++;
+                    });
 
-                        if (codeMatch || numMatch || suffixMatch) {
-                            absenceCountMap[rObj.code] = (absenceCountMap[rObj.code] || 0) + 1;
-                            if (subjectStatsMap[rObj.code][itemSubj]) {
-                                subjectStatsMap[rObj.code][itemSubj].missed++;
+                    rolls.forEach(rStr => {
+                        const cleanR = String(rStr).trim().toUpperCase();
+                        const rNum = parseInt(cleanR.replace(/\D/g, ''), 10);
+
+                        rollObjects.forEach(rObj => {
+                            const codeMatch = cleanR === rObj.code;
+                            const numMatch = !isNaN(rNum) && rNum === rObj.num;
+                            
+                            let suffixMatch = false;
+                            if (!isNaN(rNum) && rNum > 0) {
+                                const str1 = String(rNum);
+                                const str2 = String(rObj.num);
+                                if (str1.length >= 2 && str2.length >= 2) {
+                                    suffixMatch = str1.endsWith(str2) || str2.endsWith(str1);
+                                }
                             }
-                        }
+
+                            if (codeMatch || numMatch || suffixMatch) {
+                                absenceCountMap[rObj.code] = (absenceCountMap[rObj.code] || 0) + 1;
+                                if (subjectStatsMap[rObj.code][itemSubj]) {
+                                    subjectStatsMap[rObj.code][itemSubj].missed++;
+                                }
+                            }
+                        });
                     });
                 });
-            });
 
-            const shortageList = [];
-            rollObjects.forEach(rObj => {
-                const missed = absenceCountMap[rObj.code] || 0;
-                const attended = Math.max(0, totalConducted - missed);
-                const pct = totalConducted > 0 ? (attended / totalConducted) * 100 : 100;
-                const roundedPct = Math.round(pct * 10) / 10;
+                const shortageList = [];
+                rollObjects.forEach(rObj => {
+                    const missed = absenceCountMap[rObj.code] || 0;
+                    const attended = Math.max(0, totalConducted - missed);
+                    const pct = totalConducted > 0 ? (attended / totalConducted) * 100 : 100;
+                    const roundedPct = Math.round(pct * 10) / 10;
 
-                // Per-subject breakdown array
-                const subjBreakdown = [];
-                const sMap = subjectStatsMap[rObj.code] || {};
-                for (let sName in sMap) {
-                    const sCond = sMap[sName].conducted;
-                    const sMiss = sMap[sName].missed;
-                    const sAtt = Math.max(0, sCond - sMiss);
-                    const sPct = sCond > 0 ? Math.round((sAtt / sCond) * 1000) / 10 : 100;
-                    subjBreakdown.push({
-                        subject: sName,
-                        conducted: sCond,
-                        missed: sMiss,
-                        attended: sAtt,
-                        percent: sPct
-                    });
+                    // Per-subject breakdown array
+                    const subjBreakdown = [];
+                    const sMap = subjectStatsMap[rObj.code] || {};
+                    for (let sName in sMap) {
+                        const sCond = sMap[sName].conducted;
+                        const sMiss = sMap[sName].missed;
+                        const sAtt = Math.max(0, sCond - sMiss);
+                        const sPct = sCond > 0 ? Math.round((sAtt / sCond) * 1000) / 10 : 100;
+                        subjBreakdown.push({
+                            subject: sName,
+                            conducted: sCond,
+                            missed: sMiss,
+                            attended: sAtt,
+                            percent: sPct
+                        });
+                    }
+
+                    if (roundedPct < cutoff || cutoff === 100) {
+                        shortageList.push({
+                            roll: rObj.code,
+                            total: totalConducted,
+                            missed: missed,
+                            attended: attended,
+                            percent: roundedPct,
+                            subjectBreakdown: subjBreakdown
+                        });
+                    }
+                });
+
+                shortageList.sort((a, b) => a.percent - b.percent);
+                renderShortageResults(container, yrVal, secVal, subjFilter, sRollStr, eRollStr, totalConducted, cutoff, shortageList, periodLabel);
+
+            } catch (err) {
+                console.error('Error calculating shortage:', err);
+                if (container) {
+                    container.innerHTML = '<div style="color: #ef4444; padding: 12px; text-align: center; font-weight: 600;">An error occurred while calculating shortage. Please try again.</div>';
                 }
-
-                if (roundedPct < cutoff || cutoff === 100) {
-                    shortageList.push({
-                        roll: rObj.code,
-                        total: totalConducted,
-                        missed: missed,
-                        attended: attended,
-                        percent: roundedPct,
-                        subjectBreakdown: subjBreakdown
-                    });
-                }
-            });
-
-            shortageList.sort((a, b) => a.percent - b.percent);
-
-            if (spinner) spinner.style.display = 'none';
-            if (calcBtnText) calcBtnText.textContent = '📊 Calculate Shortage Report';
-            calcBtn.disabled = false;
-
-            renderShortageResults(container, yrVal, secVal, subjFilter, sRollStr, eRollStr, totalConducted, cutoff, shortageList, periodLabel);
+            } finally {
+                if (spinner) spinner.style.display = 'none';
+                if (calcBtnText) calcBtnText.textContent = '📊 Calculate Shortage Report';
+                calcBtn.disabled = false;
+            }
         });
     });
 }
