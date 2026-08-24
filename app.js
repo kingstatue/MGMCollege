@@ -631,12 +631,15 @@ function subjectsAreSame(subj1, subj2) {
     return a === b;
 }
 
+/** Parallel electives/languages (e.g. Kannada vs Sanskrit vs Hindi) under Combined (ALL) are allowed concurrently in the same slot. */
 function isParallelCombinedSubjectEntry(sec1, subj1, sec2, subj2) {
-    if (!isCombinedSectionValue(sec1) || !isCombinedSectionValue(sec2)) return false;
-    const a = String(subj1 || '').trim();
-    const b = String(subj2 || '').trim();
-    if (!a || !b) return false;
-    return !subjectsAreSame(a, b);
+    if (isCombinedSectionValue(sec1) && isCombinedSectionValue(sec2)) {
+        const a = String(subj1 || '').trim();
+        const b = String(subj2 || '').trim();
+        if (!a || !b) return false;
+        return !subjectsAreSame(a, b);
+    }
+    return false;
 }
 
 function isSameAttendanceIdentity(a, b) {
@@ -1282,32 +1285,46 @@ function showSlotConflictDialog(params) {
 
         document.body.style.overflow = 'hidden';
 
+        const isEditing = !!params.isEditing;
+        const titleText = isEditing
+            ? `✏️ Edit Entry Confirmation (Slot ${escapeHTML(String(params.slot))})`
+            : `⚠️ Slot Entry Conflict (Slot ${escapeHTML(String(params.slot))})`;
+        const titleColor = isEditing ? '#93c5fd' : '#f59e0b';
+        const borderColor = isEditing ? '#3b82f6' : '#eab308';
+
+        const subText = isEditing
+            ? `Review your changes for <strong>Slot ${escapeHTML(String(params.slot))}</strong> on <strong>${escapeHTML(params.date)}</strong> (${escapeHTML(params.year)} Sec ${escapeHTML(params.section)}). Choose an action before submitting:`
+            : `An entry already exists for <strong>Slot ${escapeHTML(String(params.slot))}</strong> on <strong>${escapeHTML(params.date)}</strong> (${escapeHTML(params.year)} Sec ${escapeHTML(params.section)}).`;
+
+        const prevLabel = isEditing ? 'Original Entry (Before Edit):' : 'Previous Teacher / Slot Entry:';
+        const currLabel = isEditing ? 'Your Edited Entry:' : 'Your Current Entry:';
+
         const dialog = document.createElement('div');
         dialog.id = 'slotConflictModalDialog';
         dialog.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100vw; height: 100vh; z-index: 9999999; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.88); padding: 16px; box-sizing: border-box; overflow-y: auto;';
 
         dialog.innerHTML = `
-            <div class="modal-card" style="max-width: 480px; width: 100%; padding: 20px; border: 2px solid #eab308; background: #0f172a; color: #ffffff; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.9); box-sizing: border-box;">
+            <div class="modal-card" style="max-width: 480px; width: 100%; padding: 20px; border: 2px solid ${borderColor}; background: #0f172a; color: #ffffff; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.9); box-sizing: border-box;">
                 
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #334155;">
-                    <h3 style="margin: 0; font-size: 1.15rem; color: #f59e0b; font-weight: 800; display: flex; align-items: center; gap: 8px;">
-                        ⚠️ Slot Entry Conflict (Slot ${escapeHTML(String(params.slot))})
+                    <h3 style="margin: 0; font-size: 1.15rem; color: ${titleColor}; font-weight: 800; display: flex; align-items: center; gap: 8px;">
+                        ${titleText}
                     </h3>
                 </div>
 
                 <div style="font-size: 0.88rem; line-height: 1.5; margin-bottom: 14px; color: #cbd5e1;">
-                    An entry already exists for <strong>Slot ${escapeHTML(String(params.slot))}</strong> on <strong>${escapeHTML(params.date)}</strong> (${escapeHTML(params.year)} Sec ${escapeHTML(params.section)}).
+                    ${subText}
                 </div>
 
                 <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px;">
                     <div style="background: #1e293b; padding: 12px; border-radius: 10px; border-left: 4px solid #ef4444;">
-                        <div style="font-weight: 700; color: #fca5a5; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.5px;">Previous Teacher / Slot Entry:</div>
+                        <div style="font-weight: 700; color: #fca5a5; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.5px;">${prevLabel}</div>
                         <div style="font-size: 0.9rem; color: #ffffff; margin-top: 2px;">Subject: <strong>${escapeHTML(params.existingSubj || params.subject)}</strong></div>
                         <div style="font-size: 0.9rem; color: #f87171; font-weight: 700; margin-top: 2px;">Absentees: ${escapeHTML(params.existingRolls || 'NIL')}</div>
                     </div>
 
                     <div style="background: #1e293b; padding: 12px; border-radius: 10px; border-left: 4px solid #3b82f6;">
-                        <div style="font-weight: 700; color: #93c5fd; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.5px;">Your Current Entry:</div>
+                        <div style="font-weight: 700; color: #93c5fd; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.5px;">${currLabel}</div>
                         <div style="font-size: 0.9rem; color: #ffffff; margin-top: 2px;">Subject: <strong>${escapeHTML(params.subject)}</strong></div>
                         <div style="font-size: 0.9rem; color: #60a5fa; font-weight: 700; margin-top: 2px;">Absentees: ${escapeHTML(params.newRolls || 'NIL')}</div>
                     </div>
@@ -1420,22 +1437,6 @@ async function removeMovedEditOriginal(orig) {
         localStorage.setItem('mgm_attendance_history', JSON.stringify(compactAttendanceHistory(hist)));
         renderHistoryList();
     } catch (e) {}
-    try {
-        const targetUrl = getWebhookUrl(orig.stream || currentDept);
-        await postWithRetry(targetUrl, withAuth({
-            action: 'delete',
-            date: orig.date,
-            year: orig.year,
-            section: orig.section,
-            subject: orig.subject,
-            slot: orig.slot,
-            stream: orig.stream || currentDept || 'BCA',
-            rollNumbers: 'NIL',
-            changesSummary: 'Removed old entry after edit move'
-        }), 2);
-    } catch (e) {
-        console.warn('Could not delete old edit row from sheet:', e);
-    }
 }
 
 async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectVal, slotVal, btnElem, textElem, spinnerElem) {
@@ -1601,18 +1602,26 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
         return true;
     });
 
-    const hasConflict = (!editingSelf && !!existingEntry) || !!(sheetConflict.exists && !sheetConflict.offline);
+    const isEditingMode = !!editOrig;
+    const hasConflict = isEditingMode || !!existingEntry || !!(sheetConflict.exists && !sheetConflict.offline);
     let finalRolls = formattedRolls;
     let finalRollsArr = rollNumbersArray;
-    let conflictChoice = editingSelf ? 'replace' : 'create';
+    let conflictChoice = isEditingMode ? 'replace' : 'create';
 
     if (hasConflict) {
-        const prevSubj = (sheetConflict.exists && sheetConflict.subject)
-            ? sheetConflict.subject
-            : (existingEntry ? existingEntry.subject : cleanSubject);
-        const prevRolls = (sheetConflict.exists && sheetConflict.rollNumbers != null)
-            ? sheetConflict.rollNumbers
-            : (existingEntry ? existingEntry.rollNumbers : 'NIL');
+        let prevSubj = cleanSubject;
+        let prevRolls = 'NIL';
+
+        if (sheetConflict.exists && sheetConflict.subject) {
+            prevSubj = sheetConflict.subject;
+            prevRolls = sheetConflict.rollNumbers != null ? sheetConflict.rollNumbers : 'NIL';
+        } else if (existingEntry) {
+            prevSubj = existingEntry.subject;
+            prevRolls = existingEntry.rollNumbers;
+        } else if (editOrig) {
+            prevSubj = editOrig.subject || cleanSubject;
+            prevRolls = editOrig.rollNumbers || 'NIL';
+        }
 
         const userChoice = await showSlotConflictDialog({
             date: cleanDate,
@@ -1622,7 +1631,8 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
             subject: cleanSubject,
             existingSubj: prevSubj,
             existingRolls: prevRolls,
-            newRolls: formattedRolls
+            newRolls: formattedRolls,
+            isEditing: isEditingMode
         });
 
         if (!userChoice || userChoice.action === 'cancel') {
@@ -1639,10 +1649,10 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
     if (textElem) textElem.style.opacity = '0.5';
     if (spinnerElem) spinnerElem.style.display = 'block';
 
-    const isUpdate = hasConflict;
+    const isUpdate = isEditingMode || hasConflict;
     const prevRollsArr = (sheetConflict.exists && !sheetConflict.offline)
         ? normalizeRollNumbers(sheetConflict.rollNumbers)
-        : (existingEntry ? normalizeRollNumbers(existingEntry.rollNumbers) : []);
+        : (existingEntry ? normalizeRollNumbers(existingEntry.rollNumbers) : (editOrig ? normalizeRollNumbers(editOrig.rollNumbers) : []));
     const diff = computeRollDiff(prevRollsArr.join(', '), finalRolls);
 
     const payload = {
@@ -2605,15 +2615,126 @@ function clearLocalHistoryCache() {
         try { localStorage.removeItem('mgm_attendance_history'); } catch (e) {}
         try { localStorage.removeItem('mgm_bca_attendance_history'); } catch (e) {}
         showCustomToast('🧹 Local Cache Cleared!', 'Fetching fresh entries from Google Sheet...');
-        fetchFullSheetHistory();
-        renderHistoryList();
     }
 }
 
-/** Optional slot greying — must never throw or Today/History list stays empty. */
+function updateAvailableSlots(deptCode, dateStr, yearStr, sectionStr, selectEl) {
+    if (!selectEl) return;
+    const stream = deptCode || currentDept || 'BCA';
+    const cleanDate = normalizeHistoryDate(dateStr) || getTodayISOString();
+    const cleanYear = hodYearPrefix(yearStr);
+    const secNorm = normalizeSectionCode(sectionStr || 'A');
+
+    const isCombined = secNorm === 'ALL' || secNorm === 'COMBINED' || secNorm === 'COMMON' || String(sectionStr || '').toUpperCase().includes('COMBIN');
+    const isParallelAllowed = (typeof allowsParallelSubjects === 'function') ? allowsParallelSubjects(stream) : (stream === 'BSC' || stream === 'BA');
+
+    // Query history for marked entries on this date, year, section & stream
+    const history = readAllHistory();
+    const markedMap = new Map();
+
+    history.forEach(item => {
+        if (!item) return;
+        const itemStream = item.stream || 'BCA';
+        if (!isStreamMatch(itemStream, stream)) return;
+        if (normalizeHistoryDate(item.date) !== cleanDate) return;
+        if (hodYearPrefix(item.year) !== cleanYear) return;
+
+        const itemSecNorm = normalizeSectionCode(item.section || 'A');
+        
+        let isSecMatched = false;
+        if (isCombined) {
+            // In Combined mode: match ANY section entry for this date/year/stream
+            isSecMatched = true;
+        } else {
+            // In specific section mode (e.g. Sec A): match if section matches OR if Combined/ALL entry exists
+            if (itemSecNorm === secNorm || isCombinedSectionValue(itemSecNorm)) {
+                isSecMatched = true;
+            }
+        }
+
+        if (isSecMatched) {
+            const slotNum = parseInt(item.slot, 10) || 1;
+            if (!markedMap.has(slotNum)) markedMap.set(slotNum, []);
+            markedMap.get(slotNum).push(item);
+        }
+    });
+
+    // Determine slot being edited so correction is allowed
+    const editingSlot = (editingOriginalEntry && 
+        normalizeHistoryDate(editingOriginalEntry.date) === cleanDate && 
+        hodYearPrefix(editingOriginalEntry.year) === cleanYear && 
+        normalizeSectionCode(editingOriginalEntry.section) === secNorm)
+        ? parseInt(editingOriginalEntry.slot, 10)
+        : null;
+
+    const slotTimeLabels = {
+        1: '9:00 - 9:55 AM',
+        2: '10:00 - 10:55 AM',
+        3: '11:10 - 12:05 PM',
+        4: '12:10 - 1:05 PM',
+        5: '1:05 - 2:00 PM',
+        6: '2:00 - 2:55 PM',
+        7: '3:00 - 3:55 PM',
+        8: '4:00 - 4:55 PM'
+    };
+
+    for (let slotNum = 1; slotNum <= 8; slotNum++) {
+        let option = Array.from(selectEl.options).find(opt => parseInt(opt.value, 10) === slotNum);
+        if (!option) {
+            option = document.createElement('option');
+            option.value = String(slotNum);
+            selectEl.appendChild(option);
+        }
+
+        const timeLabel = slotTimeLabels[slotNum] || (`Slot ${slotNum}`);
+        const entriesForSlot = markedMap.get(slotNum) || [];
+        const isMarked = entriesForSlot.length > 0;
+
+        if (isCombined || isParallelAllowed) {
+            // COMBINED / ELECTIVE / PARALLEL: Keep ALL slots ACTIVE & ENABLED!
+            option.disabled = false;
+            if (isMarked) {
+                const subjs = entriesForSlot.map(e => {
+                    const secTag = (e.section && e.section !== 'ALL' && e.section !== 'COMBINED' && e.section !== 'COMMON')
+                        ? `Sec ${e.section}: ` : '';
+                    return `${secTag}${e.subject || 'Marked'}`;
+                }).filter(Boolean).join(', ');
+                option.textContent = `Slot ${slotNum} (${timeLabel}) — Marked (${entriesForSlot.length} subj: ${subjs})`;
+            } else {
+                option.textContent = `Slot ${slotNum} (${timeLabel})`;
+            }
+        } else {
+            // SPECIFIC SECTIONS (Sec A, B, C, C_TP, C_AF, C_AIML):
+            // Disable if marked, UNLESS it is the slot being edited for correction
+            if (isMarked && slotNum !== editingSlot) {
+                option.disabled = true;
+                const subjDetails = entriesForSlot.map(e => {
+                    const secTag = (isCombinedSectionValue(e.section)) ? 'Combined: ' : '';
+                    return `${secTag}${e.subject || 'Marked'}`;
+                }).join(', ');
+                option.textContent = `Slot ${slotNum} (${timeLabel}) — Marked (${subjDetails}) ✓`;
+            } else {
+                option.disabled = false;
+                option.textContent = `Slot ${slotNum} (${timeLabel})`;
+            }
+        }
+    }
+
+    // If currently selected option is disabled, shift to first available enabled option
+    if (selectEl.selectedIndex >= 0) {
+        const selectedOpt = selectEl.options[selectEl.selectedIndex];
+        if (selectedOpt && selectedOpt.disabled) {
+            const firstEnabled = Array.from(selectEl.options).find(opt => opt.value && !opt.disabled);
+            if (firstEnabled) {
+                selectEl.value = firstEnabled.value;
+            }
+        }
+    }
+}
+
+/** Optional slot greying — updates available slots dynamically per section mode. */
 function refreshAllSlotDropdowns() {
     try {
-        if (typeof updateAvailableSlots !== 'function') return;
         const dSlot = document.getElementById('directSlotSelect');
         const dDate = document.getElementById('directDateInput');
         const dYear = document.getElementById('directYearSelect');
@@ -4470,6 +4591,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (elem) {
             const run = () => {
                 if (elem === subjectInput || elem === sectionSelect) checkLanguageElectiveAutoCombined(subjectInput.value, sectionSelect, yearSelect);
+                refreshAllSlotDropdowns();
                 updateModalDoubleEntryCheck();
             };
             elem.addEventListener('change', run);
@@ -4481,6 +4603,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (elem) {
             const run = () => {
                 if (elem === directSubjectInput || elem === directSectionSelect) checkLanguageElectiveAutoCombined(directSubjectInput.value, directSectionSelect, directYearSelect);
+                refreshAllSlotDropdowns();
                 updateDirectDoubleEntryCheck();
                 try { updateMarkAbsenteesStepUI(); } catch (e) {}
             };
@@ -4918,7 +5041,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v67_multistream_sync_fixed';
+    const APP_VER = 'v68_slot_disable_combined';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
         localStorage.setItem('mgm_app_ver', APP_VER);
