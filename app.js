@@ -1441,7 +1441,7 @@ function showSlotConflictDialog(params) {
                         🔀 MERGE BOTH ENTRIES (${mergedRollsArr.length} Absentees)
                     </button>
                     <button type="button" id="conflictReplaceBtn" style="background: #991b1b; color: #ffffff; border: none; font-weight: 700; padding: 12px; font-size: 0.88rem; border-radius: 10px; cursor: pointer; width: 100%; min-height: 44px; touch-action: manipulation;">
-                        ✏️ Overwrite / Replace with My List Only
+                        ${replaceBtnText}
                     </button>
                     <button type="button" id="conflictCancelBtn" style="background: #334155; color: #cbd5e1; border: none; font-weight: 600; padding: 10px; font-size: 0.84rem; border-radius: 10px; cursor: pointer; width: 100%; min-height: 40px; touch-action: manipulation;">
                         ❌ Cancel Submission
@@ -1765,12 +1765,17 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
         section: cleanSection,
         subject: cleanSubject,
         slot: cleanSlot,
+        originalDate: editOrig ? editOrig.date : cleanDate,
+        originalSlot: editOrig ? editOrig.slot : cleanSlot,
+        originalSubject: editOrig ? editOrig.subject : cleanSubject,
+        originalSection: editOrig ? editOrig.section : cleanSection,
+        originalYear: editOrig ? editOrig.year : yearVal,
         previousRollNumbers: diff.prevRolls.length > 0 ? diff.prevRolls.join(', ') : 'NIL',
         addedRollNumbers: diff.addedRolls.length > 0 ? diff.addedRolls.join(', ') : 'NIL',
         deletedRollNumbers: diff.deletedRolls.length > 0 ? diff.deletedRolls.join(', ') : 'NIL',
         retainedRollNumbers: diff.retainedRolls.length > 0 ? diff.retainedRolls.join(', ') : 'NIL',
         changesSummary: isUpdate 
-            ? (conflictChoice === 'merge' ? '🔀 Merged absentees from both entries' : '✏️ Replaced previous entry')
+            ? (conflictChoice === 'merge' ? '🔀 Merged absentees from both entries' : '✏️ Updated entry in Google Sheets')
             : 'Initial Submission'
     };
 
