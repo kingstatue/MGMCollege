@@ -190,23 +190,18 @@ function getAuthPayload() {
 function setAuthSession(passcode, role, deptCode, remember) {
     const pass = (passcode || '').trim();
     try { sessionStorage.setItem('mgm_auth_pass', pass); } catch (e) {}
-    // Always keep a durable session copy for API calls (mobile PWA).
-    // "Remember" only controls auto-login / prefill — do NOT wipe session on uncheck.
+    // Always persist session passcode, stream, and logged-in state in localStorage so session survives app close/reopen
     try { localStorage.setItem('mgm_session_pass', pass); } catch (e) {}
+    try { localStorage.setItem('mgm_remember_pass', pass); } catch (e) {}
+    try { localStorage.setItem('mgm_is_logged_in', 'true'); } catch (e) {}
     if (deptCode) {
         try { localStorage.setItem('mgm_auth_stream', deptCode); } catch (e) {}
+        try { localStorage.setItem('mgm_dept', deptCode); } catch (e) {}
         currentDept = deptCode;
-    }
-    if (remember) {
-        try { localStorage.setItem('mgm_remember_pass', pass); } catch (e) {}
-        try { localStorage.setItem('mgm_remember_checked', '1'); } catch (e) {}
-    } else {
-        try { localStorage.removeItem('mgm_remember_pass'); } catch (e) {}
-        try { localStorage.removeItem('mgm_remember_checked'); } catch (e) {}
     }
     if (role) {
         currentRole = role;
-        localStorage.setItem('mgm_role', role);
+        try { localStorage.setItem('mgm_role', role); } catch (e) {}
     }
 }
 
@@ -214,14 +209,22 @@ function clearAuthSession() {
     try { sessionStorage.removeItem('mgm_auth_pass'); } catch (e) {}
     try { localStorage.removeItem('mgm_session_pass'); } catch (e) {}
     try { localStorage.removeItem('mgm_remember_pass'); } catch (e) {}
+    try { localStorage.removeItem('mgm_remember_checked'); } catch (e) {}
     try { localStorage.removeItem('mgm_auth_stream'); } catch (e) {}
+    try { localStorage.removeItem('mgm_is_logged_in'); } catch (e) {}
+    try { localStorage.removeItem('mgm_dept'); } catch (e) {}
+    try { localStorage.removeItem('mgm_role'); } catch (e) {}
 }
 
 function restoreAuthSessionFromRemember() {
     try {
         const remembered = localStorage.getItem('mgm_session_pass') ||
             localStorage.getItem('mgm_remember_pass') || '';
-        if (remembered) sessionStorage.setItem('mgm_auth_pass', remembered);
+        if (remembered) {
+            sessionStorage.setItem('mgm_auth_pass', remembered);
+            localStorage.setItem('mgm_session_pass', remembered);
+            localStorage.setItem('mgm_remember_pass', remembered);
+        }
     } catch (e) {}
 }
 
@@ -527,6 +530,11 @@ const directSubmitBtn = document.getElementById('directSubmitBtn');
 const directSubmitBtnText = document.getElementById('directSubmitBtnText');
 const directSubmitSpinner = document.getElementById('directSubmitSpinner');
 const directResetBtn = document.getElementById('directResetBtn');
+const directMicBtn = document.getElementById('directMicBtn');
+const directMicBtnLabel = document.getElementById('directMicBtnLabel');
+const directMicStatusBanner = document.getElementById('directMicStatusBanner');
+const directMicStatusText = document.getElementById('directMicStatusText');
+const directMicStopBtn = document.getElementById('directMicStopBtn');
 
 // Modal & Alert Elements
 const confirmationModal = document.getElementById('confirmationModal');
@@ -1075,7 +1083,11 @@ function initSpeechRecognition() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-        updateStatus('Speech API unavailable. Manual typing mode fully supported.', 'error');
+        if (typeof showCustomToast === 'function') {
+            showCustomToast('⚠️ Speech Unavailable', 'Speech recognition is not supported in this browser. You can type absentees manually.');
+        } else {
+            alert('Speech recognition is not supported in this browser environment.');
+        }
         return false;
     }
 
@@ -1086,11 +1098,21 @@ function initSpeechRecognition() {
 
     recognition.onstart = () => {
         isListening = true;
-        micWrapper.classList.add('active');
-        statusPill.className = 'status-pill listening';
-        statusText.textContent = 'Listening... Speak now';
-        micBtnLabel.textContent = 'Stop';
-        startVisualizer();
+        currentTranscript = '';
+        interimTranscript = '';
+
+        // Direct form mic button UI
+        if (directMicBtn) directMicBtn.classList.add('listening');
+        if (directMicBtnLabel) directMicBtnLabel.textContent = 'Listening...';
+        if (directMicStatusBanner) directMicStatusBanner.style.display = 'flex';
+        if (directMicStatusText) directMicStatusText.textContent = 'Listening... Speak roll numbers now';
+
+        // Legacy elements (safely updated if present)
+        if (micWrapper) micWrapper.classList.add('active');
+        if (statusPill) statusPill.className = 'status-pill listening';
+        if (statusText) statusText.textContent = 'Listening... Speak now';
+        if (micBtnLabel) micBtnLabel.textContent = 'Stop';
+        try { startVisualizer(); } catch (e) {}
     };
 
     recognition.onresult = (event) => {
@@ -1107,8 +1129,8 @@ function initSpeechRecognition() {
 
     recognition.onerror = (event) => {
         console.error('Speech error:', event.error);
-        if (event.error !== 'no-speech') {
-            updateStatus(`Speech Error: ${event.error}`, 'error');
+        if (event.error !== 'no-speech' && typeof showCustomToast === 'function') {
+            showCustomToast('⚠️ Speech Error', `Microphone error: ${event.error}`);
         }
         stopListening();
     };
@@ -1122,8 +1144,6 @@ function initSpeechRecognition() {
 
 function toggleListening() {
     if (!recognition && !initSpeechRecognition()) {
-        alert('Voice recognition is not supported in this browser environment. Switching to Manual Typing mode.');
-        switchMode('typing');
         return;
     }
 
@@ -1144,28 +1164,48 @@ function stopListening() {
     if (recognition) {
         try { recognition.stop(); } catch (e) {}
     }
-    micWrapper.classList.remove('active');
-    statusPill.className = 'status-pill';
-    statusText.textContent = 'Tap microphone to speak';
-    micBtnLabel.textContent = 'Tap to Speak';
-    stopVisualizer();
 
-    if (currentTranscript.trim().length > 0) {
-        autoProcessSpeech(currentTranscript);
+    // Direct form mic UI reset
+    if (directMicBtn) directMicBtn.classList.remove('listening');
+    if (directMicBtnLabel) directMicBtnLabel.textContent = 'Voice Input';
+    if (directMicStatusBanner) directMicStatusBanner.style.display = 'none';
+
+    // Legacy mic UI reset
+    if (micWrapper) micWrapper.classList.remove('active');
+    if (statusPill) statusPill.className = 'status-pill';
+    if (statusText) statusText.textContent = 'Tap microphone to speak';
+    if (micBtnLabel) micBtnLabel.textContent = 'Tap to Speak';
+    try { stopVisualizer(); } catch (e) {}
+
+    const spokenText = (currentTranscript + ' ' + interimTranscript).trim();
+    currentTranscript = '';
+    interimTranscript = '';
+
+    if (spokenText.length > 0) {
+        processDirectVoiceSpeech(spokenText);
     }
 }
 
 function renderTranscript() {
     const fullText = (currentTranscript + ' ' + interimTranscript).trim();
-    if (!fullText) {
-        transcriptText.innerHTML = `<span class="transcript-placeholder">Spoken words will appear here in real-time...</span>`;
-        processBtn.disabled = true;
-    } else {
-        transcriptText.innerHTML = `
-            <span>${escapeHTML(currentTranscript)}</span>
-            <span class="interim-text">${escapeHTML(interimTranscript)}</span>
-        `;
-        processBtn.disabled = false;
+
+    // Update compact live status text in Mark Absentees form
+    if (directMicStatusText) {
+        directMicStatusText.textContent = fullText ? `Listening: "${fullText}"` : 'Listening... Speak roll numbers now';
+    }
+
+    // Legacy transcript card rendering
+    if (typeof transcriptText !== 'undefined' && transcriptText) {
+        if (!fullText) {
+            transcriptText.innerHTML = `<span class="transcript-placeholder">Spoken words will appear here in real-time...</span>`;
+            if (processBtn) processBtn.disabled = true;
+        } else {
+            transcriptText.innerHTML = `
+                <span>${escapeHTML(currentTranscript)}</span>
+                <span class="interim-text">${escapeHTML(interimTranscript)}</span>
+            `;
+            if (processBtn) processBtn.disabled = false;
+        }
     }
 }
 
@@ -1174,8 +1214,68 @@ function clearTranscript() {
     interimTranscript = '';
     parsedData = null;
     renderTranscript();
-    statusPill.className = 'status-pill';
-    statusText.textContent = 'Tap microphone to speak';
+    if (statusPill) statusPill.className = 'status-pill';
+    if (statusText) statusText.textContent = 'Tap microphone to speak';
+}
+
+function processDirectVoiceSpeech(text) {
+    const clean = (text || '').trim();
+    if (!clean) return;
+
+    const parsed = parseAttendanceSpeech(clean, currentDept);
+    console.log('Parsed Direct Voice Data:', parsed);
+
+    let insertedStr = '';
+
+    // 1. Roll numbers extraction & population
+    if (parsed && Array.isArray(parsed.rollNumbers) && parsed.rollNumbers.length > 0) {
+        insertedStr = parsed.rollNumbers.join(', ');
+    } else {
+        // Fallback: extract digits from text if parser didn't find full roll format
+        const matches = clean.match(/\b\d+\b/g);
+        if (matches && matches.length > 0) {
+            insertedStr = matches.join(', ');
+        } else {
+            insertedStr = clean;
+        }
+    }
+
+    if (insertedStr && directRollInput) {
+        const existingVal = directRollInput.value.trim();
+        if (existingVal.length > 0) {
+            directRollInput.value = existingVal + ', ' + insertedStr;
+        } else {
+            directRollInput.value = insertedStr;
+        }
+        directRollInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    // 2. If year, section, slot, or subject were explicitly spoken, update direct form inputs
+    if (parsed.year && directYearSelect) directYearSelect.value = parsed.year;
+    if (parsed.section && directSectionSelect) directSectionSelect.value = parsed.section;
+    if (parsed.slot && directSlotSelect) directSlotSelect.value = String(parsed.slot);
+    if (parsed.subject && directSubjectInput) setSubjectValue(directSubjectInput, parsed.subject);
+    if (parsed.date && directDateInput) directDateInput.value = parsed.date;
+
+    // 3. Trigger auto-combined elective section update
+    if (typeof checkLanguageElectiveAutoCombined === 'function') {
+        checkLanguageElectiveAutoCombined(directSubjectInput ? directSubjectInput.value : '', directSectionSelect, directYearSelect);
+    }
+
+    // 4. Update multi-slot breakdown visibility if multi-slot duration active
+    const directDurationSelect = document.getElementById('directDurationSelect');
+    const directMultiSlotWrapper = document.getElementById('directMultiSlotContainer');
+    const directMultiSlotBreakdown = document.getElementById('directMultiSlotBreakdown');
+    if (typeof handleMultiSlotVisibility === 'function') {
+        handleMultiSlotVisibility(directDurationSelect, directSlotSelect, directRollInput, directMultiSlotWrapper, directMultiSlotBreakdown);
+    }
+
+    try { updateMarkAbsenteesStepUI(); } catch (e) {}
+
+    // 5. User feedback toast
+    if (typeof showCustomToast === 'function') {
+        showCustomToast('🎤 Voice Input Added', `Updated roll numbers: ${insertedStr}`);
+    }
 }
 
 // 3. Parser Trigger & Synchronization
@@ -3322,19 +3422,19 @@ function initDepartmentManager() {
         });
     }
 
-    // Remembered session: restore if PIN still valid
-    const savedDept = localStorage.getItem('mgm_dept');
-    const rememberedPass = localStorage.getItem('mgm_remember_pass') || localStorage.getItem('mgm_session_pass') || '';
-    if (savedDept && DEPT_CONFIG[savedDept] && rememberedPass && rememberedPass !== 'BYPASS') {
+    // Persistent stream session: restore logged screen on reopen unless exit clicked
+    const savedDept = localStorage.getItem('mgm_dept') || localStorage.getItem('mgm_auth_stream');
+    const rememberedPass = localStorage.getItem('mgm_session_pass') || localStorage.getItem('mgm_remember_pass') || '';
+    if (savedDept && DEPT_CONFIG[savedDept] && (rememberedPass || localStorage.getItem('mgm_is_logged_in') === 'true')) {
         restoreAuthSessionFromRemember();
         currentRole = localStorage.getItem('mgm_role') || 'TEACHER';
         isHODAuthenticated = true;
         applyDepartment(savedDept);
         applyRoleUI();
         switchMode('typing');
-        deptLoginModal.classList.remove('active');
+        if (deptLoginModal) deptLoginModal.classList.remove('active');
 
-        if (navigator.onLine) {
+        if (navigator.onLine && rememberedPass && rememberedPass !== 'BYPASS') {
             authenticateWithServer(savedDept, rememberedPass).then((res) => {
                 if (res && res.ok) {
                     syncLocalPasscodeFromLogin(savedDept, res.role || currentRole, rememberedPass);
@@ -3347,7 +3447,6 @@ function initDepartmentManager() {
                 }
                 if (res && !res.offline && !res.slow) {
                     clearAuthSession();
-                    localStorage.removeItem('mgm_dept');
                     isHODAuthenticated = false;
                     if (loginAlertBox) {
                         loginAlertBox.style.display = 'block';
@@ -3355,12 +3454,12 @@ function initDepartmentManager() {
                             'PIN was changed. Enter the new stream PIN to continue.';
                     }
                     if (deptPasscode) deptPasscode.value = '';
-                    deptLoginModal.classList.add('active');
+                    if (deptLoginModal) deptLoginModal.classList.add('active');
                 }
             }).catch(() => {});
         }
     } else {
-        deptLoginModal.classList.add('active');
+        if (deptLoginModal) deptLoginModal.classList.add('active');
         applyDepartment('BCA');
         applyRoleUI();
         switchMode('typing');
@@ -4500,6 +4599,8 @@ document.addEventListener('DOMContentLoaded', () => {
     initShortageCalculator();
 
     // Voice Actions (no-ops if elements missing)
+    if (directMicBtn) directMicBtn.addEventListener('click', toggleListening);
+    if (directMicStopBtn) directMicStopBtn.addEventListener('click', stopListening);
     if (micBtn) micBtn.addEventListener('click', toggleListening);
     if (clearTranscriptBtn) clearTranscriptBtn.addEventListener('click', clearTranscript);
     if (processBtn) processBtn.addEventListener('click', () => autoProcessSpeech());
