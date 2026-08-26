@@ -305,7 +305,7 @@
               </select>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" id="directSectionWrap">
               <label for="directSectionSelect">Section</label>
               <select id="directSectionSelect" class="form-select">
                 <option value="" disabled selected>Select Section</option>
@@ -316,6 +316,13 @@
                 <option value="C (AF)">Section C (AF)</option>
                 <option value="ALL">Combined (Sec A, B, C / Electives)</option>
               </select>
+
+              <!-- Combination Checkboxes UI for BSC & Audience Streams -->
+              <div id="directCombinationCheckboxes" class="combo-checkbox-panel" style="display: none;">
+                <div class="combo-panel-title">Select Combination(s) / Batches for this Class:</div>
+                <div class="combo-checkbox-list" id="directComboCheckboxesList"></div>
+                <div class="combo-preset-row" id="directComboPresetsRow"></div>
+              </div>
             </div>
           </div>
 
@@ -601,13 +608,18 @@
               </select>
             </div>
 
-            <div class="form-group">
-              <label for="sectionSelect">Section</label>
+            <div class="form-group" id="modalSectionFormGroup">
+              <label for="sectionSelect" id="modalSectionLabel">Section</label>
               <select id="sectionSelect" class="form-select" required>
                 <option value="A">Section A</option>
                 <option value="B">Section B</option>
                 <option value="C">Section C</option>
               </select>
+              <div id="modalCombinationCheckboxes" class="combo-checkbox-panel" style="display: none;">
+                <div class="combo-panel-title">Select Combination(s) / Batches:</div>
+                <div class="combo-checkbox-list" id="modalComboCheckboxesList"></div>
+                <div class="combo-preset-row" id="modalComboPresetsRow"></div>
+              </div>
             </div>
           </div>
 
