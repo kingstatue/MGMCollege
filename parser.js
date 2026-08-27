@@ -20,6 +20,11 @@ const COMMON_SUBJECTS = [
     'Discrete Math', 'Cloud Computing', 'Cloud Computing Essentials', 'Cyber Security', 'Artificial Intelligence',
     'AI', 'Fundamentals of AI & ML', 'Python Programming for AI', 'Data Science & Visualization',
     'Database Systems for AI', 'Linux & Shell Scripting', 'Android Development', 'PHP', 'Computer Architecture', 'Soft Skills',
+    // BSc Subjects (Core, Practicals & Skill Courses)
+    'Physics', 'Chemistry', 'Statistics', 'Botany', 'Zoology', 'Computer Science',
+    'Physics Practical', 'Chemistry Practical', 'Botany Practical', 'Zoology Practical', 'Statistics Lab', 'Computer Science Lab', 'Practicals - Maths',
+    'Skill Physics', 'Skill Statistics', 'Skill Mathematics', 'Skill Computer Science', 'Skill Botany', 'Skill Zoology',
+    'Discipline Elective', 'Foundation Course',
     'Kannada', 'Hindi', 'Sanskrit', 'Sanskrith', 'Sanskritha', 'Sanskrutha', 'Sanskritam'
 ];
 

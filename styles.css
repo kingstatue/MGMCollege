@@ -1897,12 +1897,114 @@ body.history-drawer-open #appFrame {
     font-size: 0.75rem;
     gap: 4px;
   }
-  .icon-btn {
-    flex: 0 0 34px;
-    width: 34px;
-    height: 34px;
   }
+
+/* Combination Checkboxes Panel for BSC & Audience Streams */
+.combo-checkbox-panel {
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.8), rgba(30, 41, 59, 0.7));
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: var(--radius-md, 10px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
+
+.combo-panel-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #a5b4fc;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.combo-panel-title strong {
+  color: #ffffff;
+  background: rgba(99, 102, 241, 0.25);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+}
+
+.combo-checkbox-list {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 6px;
+}
+
+.combo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  border-radius: 20px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: all 0.2s ease;
+}
+
+.combo-chip:hover {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(129, 140, 248, 0.6);
+  color: #ffffff;
+}
+
+.combo-chip input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #6366f1;
+  cursor: pointer;
+}
+
+.combo-chip.active {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.35), rgba(79, 70, 229, 0.35));
+  border-color: #818cf8;
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.4);
+}
+
+.combo-preset-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
+.combo-preset-pill {
+  padding: 3px 9px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: rgba(99, 102, 241, 0.15);
+  color: #c7d2fe;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.18s ease;
+}
+
+.combo-preset-pill:hover {
+  background: rgba(99, 102, 241, 0.35);
+  color: #ffffff;
+  border-color: #818cf8;
+}
+
 
 
 

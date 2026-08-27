@@ -128,7 +128,7 @@ function usesAudienceGroups(deptCode) {
 }
 
 function allowsParallelSubjects(deptCode) {
-    return usesAudienceGroups(deptCode || currentDept);
+    return false;
 }
 
 function getAudienceOptions(deptCode) {
@@ -614,13 +614,11 @@ function sectionDisplayLabel(sec) {
     return 'Sec ' + (sec || n || '?');
 }
 
-/** Combined (ALL) and Sec A/B/C must never share the same slot (BCA/B.Com). */
+/** Combined (ALL) and Section-specific/Common subjects must never share the same slot across all streams. */
 function isCombinedVsSpecificSectionConflict(sec1, sec2) {
     const aComb = isCombinedSectionValue(sec1);
     const bComb = isCombinedSectionValue(sec2);
-    const aSpec = isSpecificClassSection(sec1);
-    const bSpec = isSpecificClassSection(sec2);
-    return (aComb && bSpec) || (bComb && aSpec);
+    return (aComb && !bComb) || (bComb && !aComb);
 }
 
 function subjectsAreSame(subj1, subj2) {
@@ -652,7 +650,6 @@ function isSameAttendanceIdentity(a, b) {
 }
 
 function findCombinedVsSectionBlockEntry(history, cleanStream, cleanDate, cleanYear, cleanSlot, cleanSection, skipEntry) {
-    if (usesAudienceGroups(cleanStream)) return null;
     return (history || []).find(item => {
         if ((item.stream || 'BCA') !== cleanStream) return false;
         if (normalizeHistoryDate(item.date) !== normalizeHistoryDate(cleanDate)) return false;
@@ -1502,8 +1499,8 @@ function showCombinedSectionBlockDialog(params) {
                 </div>
                 <div style="background: #450a0a; border: 1px solid #ef4444; padding: 12px; border-radius: 10px; margin-bottom: 16px; font-size: 0.86rem; line-height: 1.45; color: #fecaca;">
                     ${tryingCombined
-                        ? 'This slot already has Sec A / B / C attendance. <strong>Combined</strong> is not allowed for the same slot.'
-                        : 'This slot already has <strong>Combined</strong> attendance. Sec A / B / C is not allowed for the same slot.'}
+                        ? 'This slot already has section-specific or common subject attendance. <strong>Combined</strong> is not allowed for the same slot.'
+                        : 'This slot already has <strong>Combined</strong> attendance. Section-specific or common subjects are not allowed for the same slot.'}
                     <br><span style="opacity: 0.9;">Change the section (or pick another slot), then submit again.</span>
                 </div>
                 <button type="button" id="conflictCancelBtn" style="background: #334155; color: #ffffff; border: none; font-weight: 800; padding: 14px; font-size: 0.95rem; border-radius: 10px; cursor: pointer; width: 100%; min-height: 48px; touch-action: manipulation;">
@@ -1766,7 +1763,7 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
     });
 
     const isEditingMode = !!editOrig;
-    const hasConflict = (!isEditingMode && !!existingEntry) || (sheetConflict.exists && !sheetConflict.offline && !sheetConflict.editingSelf && !sheetConflict.parallelElective && !sheetConflict.parallelAudience);
+    const hasConflict = isEditingMode || !!existingEntry || (sheetConflict.exists && !sheetConflict.offline && !sheetConflict.editingSelf && !sheetConflict.parallelElective && !sheetConflict.parallelAudience);
     let finalRolls = formattedRolls;
     let finalRollsArr = rollNumbersArray;
     let conflictChoice = isEditingMode ? 'replace' : 'create';
@@ -2161,26 +2158,32 @@ function resetAllInputs() {
 }
 
 // Delete = app history + Raw Data row (section B/C formulas refresh to blank)
-async function deleteData(dateVal, yearVal, sectionVal, subjectVal, slotVal) {
+async function deleteData(dateVal, yearVal, sectionVal, subjectVal, slotVal, streamVal) {
     const cleanDate = dateVal || getTodayISOString();
     const cleanSlot = parseInt(slotVal, 10) || 1;
+    const cleanStream = streamVal || currentDept || 'BCA';
+    const cleanYear = yearVal || 'First Year';
+    const cleanSection = sectionVal || 'A';
+    const cleanSubject = (subjectVal || '').trim();
 
     const history = readAllHistory();
     const targetItem = history.find(item => 
-        item.date === cleanDate &&
-        item.year === yearVal &&
-        item.section === sectionVal &&
-        item.subject.trim().toLowerCase() === subjectVal.trim().toLowerCase() &&
-        parseInt(item.slot, 10) === cleanSlot
+        (item.stream || 'BCA') === cleanStream &&
+        normalizeHistoryDate(item.date) === normalizeHistoryDate(cleanDate) &&
+        String(item.year || '').trim() === String(cleanYear).trim() &&
+        normalizeSectionCode(item.section) === normalizeSectionCode(cleanSection) &&
+        String(item.subject || '').trim().toLowerCase() === cleanSubject.toLowerCase() &&
+        (parseInt(item.slot, 10) || 1) === cleanSlot
     );
 
     const confirmDelete = confirm(
         'Delete this attendance from Google Sheets?\n\n' +
+        'Stream: ' + cleanStream + '\n' +
         'Date: ' + cleanDate + '\n' +
-        'Slot: ' + cleanSlot + ' (' + subjectVal + ')\n' +
-        'Year/Section: ' + yearVal + ' Sec ' + sectionVal + '\n\n' +
+        'Slot: ' + cleanSlot + ' (' + cleanSubject + ')\n' +
+        'Year/Section: ' + cleanYear + ' Sec ' + cleanSection + '\n\n' +
         'This will:\n' +
-        '- Remove the row from Raw Data\n' +
+        '- Remove the row from Raw Data (' + cleanStream + ')\n' +
         '- Section sheet subject/absentees go blank (formulas stay)\n' +
         '- Remove it from today\'s list on this phone\n\n' +
         'To only fix roll numbers, tap Cancel and use Edit/Submit instead.'
@@ -2192,21 +2195,23 @@ async function deleteData(dateVal, yearVal, sectionVal, subjectVal, slotVal) {
     const prevStr = prevRolls.length > 0 ? prevRolls.join(', ') : 'NIL';
 
     const updatedHistory = history.filter(item => 
-        !(item.date === cleanDate &&
-          item.year === yearVal &&
-          item.section === sectionVal &&
-          item.subject.trim().toLowerCase() === subjectVal.trim().toLowerCase() &&
-          parseInt(item.slot, 10) === cleanSlot)
+        !((item.stream || 'BCA') === cleanStream &&
+          normalizeHistoryDate(item.date) === normalizeHistoryDate(cleanDate) &&
+          String(item.year || '').trim() === String(cleanYear).trim() &&
+          normalizeSectionCode(item.section) === normalizeSectionCode(cleanSection) &&
+          String(item.subject || '').trim().toLowerCase() === cleanSubject.toLowerCase() &&
+          (parseInt(item.slot, 10) || 1) === cleanSlot)
     );
     saveHistoryToLocalStorage(updatedHistory);
     renderHistoryList();
 
     const payload = {
         action: 'delete',
+        stream: cleanStream,
         date: cleanDate,
-        year: yearVal,
-        section: sectionVal,
-        subject: subjectVal,
+        year: cleanYear,
+        section: cleanSection,
+        subject: cleanSubject,
         slot: cleanSlot,
         rollNumbers: 'NIL',
         previousRollNumbers: prevStr,
@@ -2217,7 +2222,7 @@ async function deleteData(dateVal, yearVal, sectionVal, subjectVal, slotVal) {
     console.log('Sending Delete Payload:', payload);
 
     try {
-        const targetUrl = getWebhookUrl(currentDept);
+        const targetUrl = getWebhookUrl(cleanStream);
         await postWithRetry(targetUrl, withAuth(payload), 2);
     } catch (e) {
         console.error('Error sending delete request:', e);
@@ -2231,7 +2236,7 @@ async function deleteData(dateVal, yearVal, sectionVal, subjectVal, slotVal) {
     const toastSubtextElem = document.getElementById('toastSubtext');
     const successToastElem = document.getElementById('successToast');
     if (toastTitleElem) toastTitleElem.textContent = 'Deleted from Sheets';
-    if (toastSubtextElem) toastSubtextElem.textContent = `Raw Data deleted — section formulas will clear (${cleanDate}, Slot ${cleanSlot})`;
+    if (toastSubtextElem) toastSubtextElem.textContent = `Raw Data (${cleanStream}) deleted — section formulas will clear (${cleanDate}, Slot ${cleanSlot})`;
     if (successToastElem) {
         successToastElem.classList.add('active');
         setTimeout(() => successToastElem.classList.remove('active'), 2800);
@@ -2242,7 +2247,7 @@ function deleteHistoryEntry(index, sourceList) {
     const list = sourceList || getActiveDrawerEntries();
     const item = list[index];
     if (!item) return;
-    deleteData(item.date, item.year, item.section, item.subject, item.slot);
+    deleteData(item.date, item.year, item.section, item.subject, item.slot, item.stream || currentDept);
 }
 
 const SLOT_TIME_LABELS = {
@@ -2794,7 +2799,7 @@ function updateAvailableSlots(deptCode, dateStr, yearStr, sectionStr, selectEl) 
     const secNorm = normalizeSectionCode(sectionStr || 'A');
 
     const isCombined = secNorm === 'ALL' || secNorm === 'COMBINED' || secNorm === 'COMMON' || String(sectionStr || '').toUpperCase().includes('COMBIN');
-    const isParallelAllowed = (typeof allowsParallelSubjects === 'function') ? allowsParallelSubjects(stream) : (stream === 'BSC' || stream === 'BA');
+    const isParallelAllowed = false;
 
     // Query history for marked entries on this date, year, section & stream
     const history = readAllHistory();
@@ -3576,6 +3581,8 @@ function applyRoleUI() {
 function applyDepartment(deptCode) {
     if (!DEPT_CONFIG[deptCode]) return;
     currentDept = deptCode;
+    try { localStorage.setItem('mgm_dept', deptCode); } catch (e) {}
+    try { localStorage.setItem('mgm_auth_stream', deptCode); } catch (e) {}
     wipeHODPortalState();
     const config = DEPT_CONFIG[deptCode];
 
@@ -4554,13 +4561,11 @@ function setSubjectValue(selectEl, subjectVal) {
 }
 
 function updateSectionFieldLabels(deptCode) {
-    const audience = usesAudienceGroups(deptCode);
-    const labelText = audience ? 'Combination / Batch Checkboxes' : 'Section';
-    ['directSectionSelect', 'sectionSelect'].forEach(id => {
+    ['directSectionSelect', 'sectionSelect', 'shortageSectionSelect', 'bulkSectionSelect'].forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
         const lab = document.querySelector('label[for="' + id + '"]');
-        if (lab) lab.textContent = labelText;
+        if (lab) lab.textContent = 'Section';
     });
 }
 
@@ -4570,7 +4575,10 @@ function updateSectionSelects(hasSections, deptCode, yearStr) {
     const isFirstYear = year === 'First Year' || year === '1' || year === '1st Year';
     updateSectionFieldLabels(dept);
 
-    const sectionSelects = [directSectionSelect, sectionSelect];
+    const shortageSectionSelect = document.getElementById('shortageSectionSelect');
+    const bulkSectionSelect = document.getElementById('bulkSectionSelect');
+    const sectionSelects = [directSectionSelect, sectionSelect, shortageSectionSelect, bulkSectionSelect].filter(Boolean);
+
     sectionSelects.forEach(selectEl => {
         if (!selectEl) return;
         const curVal = selectEl.value;
@@ -4638,6 +4646,8 @@ function updateSectionSelects(hasSections, deptCode, yearStr) {
             if (valid) {
                 const match = options.find(o => o.val === curVal || normalizeSectionCode(o.val) === normalizeSectionCode(curVal));
                 selectEl.value = match ? match.val : '';
+            } else if (selectEl === shortageSectionSelect || selectEl === bulkSectionSelect) {
+                selectEl.value = options[0] ? options[0].val : '';
             } else {
                 selectEl.value = '';
             }
@@ -4782,231 +4792,14 @@ function syncComboCheckboxesToSectionValue(secStr) {
 
 function renderModalCombinationCheckboxes(deptCode, selectedSection) {
     const container = document.getElementById('modalCombinationCheckboxes');
-    const listDiv = document.getElementById('modalComboCheckboxesList');
-    const presetsDiv = document.getElementById('modalComboPresetsRow');
-    if (!container || !listDiv || !presetsDiv) return;
-
-    const dept = deptCode || currentDept || 'BCA';
-    if (!usesAudienceGroups(dept)) {
-        if (sectionSelect) sectionSelect.style.display = '';
-        container.style.display = 'none';
-        return;
-    }
-
-    if (sectionSelect) sectionSelect.style.display = 'none';
-    container.style.display = 'block';
-
-    const selectedSubj = subjectInput ? subjectInput.value.trim() : '';
-    const applicableCodes = getApplicableCombinationsForSubject(selectedSubj, dept);
-
-    listDiv.innerHTML = '';
-    presetsDiv.innerHTML = '';
-
-    const curSecStr = String(selectedSection !== undefined ? selectedSection : (sectionSelect ? sectionSelect.value : '')).trim();
-    const curParts = curSecStr.split('+').map(p => normalizeSectionCode(p)).filter(Boolean);
-
-    const syncModalCombosToSectionSelect = () => {
-        const checkedBoxes = Array.from(listDiv.querySelectorAll('input[type="checkbox"]:checked'));
-        const vals = checkedBoxes.map(cb => cb.value);
-
-        let comboVal = '';
-        if (vals.length === 0) {
-            comboVal = '';
-        } else if (vals.includes('ALL')) {
-            comboVal = 'ALL';
-        } else {
-            comboVal = vals.join('+');
-        }
-
-        if (sectionSelect) {
-            if (comboVal) {
-                let matchingOpt = Array.from(sectionSelect.options).find(o => o.value === comboVal || normalizeSectionCode(o.value) === normalizeSectionCode(comboVal));
-                if (!matchingOpt) {
-                    const opt = document.createElement('option');
-                    opt.value = comboVal;
-                    opt.textContent = formatAudienceShortLabel(comboVal);
-                    sectionSelect.appendChild(opt);
-                }
-                sectionSelect.value = comboVal;
-            } else {
-                sectionSelect.value = '';
-            }
-        }
-
-        listDiv.querySelectorAll('.combo-chip').forEach(chip => {
-            const cb = chip.querySelector('input[type="checkbox"]');
-            if (cb && cb.checked) {
-                chip.classList.add('active');
-            } else {
-                chip.classList.remove('active');
-            }
-        });
-    };
-
-    applicableCodes.forEach(code => {
-        const label = document.createElement('label');
-        const codeNorm = normalizeSectionCode(code);
-        const isChecked = curSecStr === 'ALL' || curParts.includes('ALL') || curParts.includes(codeNorm) || (curParts.length === 0);
-
-        label.className = 'combo-chip' + (isChecked ? ' active' : '');
-
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.value = code;
-        cb.checked = isChecked;
-        cb.onchange = () => syncModalCombosToSectionSelect();
-
-        const txt = document.createElement('span');
-        txt.textContent = formatAudienceShortLabel(code);
-
-        label.appendChild(cb);
-        label.appendChild(txt);
-        listDiv.appendChild(label);
-    });
-
-    if (applicableCodes.length > 1) {
-        const selectAllPill = document.createElement('button');
-        selectAllPill.type = 'button';
-        selectAllPill.className = 'combo-preset-pill';
-        selectAllPill.textContent = '⚡ Combined (' + applicableCodes.join(' + ') + ')';
-        selectAllPill.onclick = () => {
-            listDiv.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
-            syncModalCombosToSectionSelect();
-        };
-        presetsDiv.appendChild(selectAllPill);
-
-        const clearPill = document.createElement('button');
-        clearPill.type = 'button';
-        clearPill.className = 'combo-preset-pill';
-        clearPill.style.borderColor = 'rgba(239, 68, 68, 0.4)';
-        clearPill.style.color = '#f87171';
-        clearPill.textContent = '🧹 Select None';
-        clearPill.onclick = () => {
-            listDiv.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
-            syncModalCombosToSectionSelect();
-        };
-        presetsDiv.appendChild(clearPill);
-    }
-
-    syncModalCombosToSectionSelect();
+    if (sectionSelect) sectionSelect.style.display = '';
+    if (container) container.style.display = 'none';
 }
 
 function renderDirectCombinationCheckboxes(deptCode) {
     const container = document.getElementById('directCombinationCheckboxes');
-    const listDiv = document.getElementById('directComboCheckboxesList');
-    const presetsDiv = document.getElementById('directComboPresetsRow');
-    if (!container || !listDiv || !presetsDiv) return;
-
-    const dept = deptCode || currentDept || 'BCA';
-    if (!usesAudienceGroups(dept)) {
-        if (directSectionSelect) directSectionSelect.style.display = '';
-        container.style.display = 'none';
-        return;
-    }
-
-    if (directSectionSelect) directSectionSelect.style.display = 'none';
-    container.style.display = 'block';
-
-    const selectedSubj = directSubjectInput ? directSubjectInput.value.trim() : '';
-    const applicableCodes = getApplicableCombinationsForSubject(selectedSubj, dept);
-
-    // Update panel header with subject context
-    const titleEl = container.querySelector('.combo-panel-title');
-    if (titleEl) {
-        const subjTag = selectedSubj ? selectedSubj : 'All Combinations';
-        const safeText = (typeof escapeHTML === 'function') ? escapeHTML(subjTag) : String(subjTag).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        titleEl.innerHTML = '✨ Combination / Batch Checkboxes for <strong>' + safeText + '</strong>:';
-    }
-
-    listDiv.innerHTML = '';
-    presetsDiv.innerHTML = '';
-
-    const syncSelectedCombosToSectionInput = () => {
-        const checkedBoxes = Array.from(listDiv.querySelectorAll('input[type="checkbox"]:checked'));
-        const vals = checkedBoxes.map(cb => cb.value);
-
-        let comboVal = '';
-        if (vals.length === 0) {
-            comboVal = '';
-        } else if (vals.includes('ALL')) {
-            comboVal = 'ALL';
-        } else {
-            comboVal = vals.join('+');
-        }
-
-        if (directSectionSelect) {
-            if (comboVal) {
-                let matchingOpt = Array.from(directSectionSelect.options).find(o => o.value === comboVal || normalizeSectionCode(o.value) === normalizeSectionCode(comboVal));
-                if (!matchingOpt) {
-                    const opt = document.createElement('option');
-                    opt.value = comboVal;
-                    opt.textContent = formatAudienceShortLabel(comboVal);
-                    directSectionSelect.appendChild(opt);
-                }
-                directSectionSelect.value = comboVal;
-            } else {
-                directSectionSelect.value = '';
-            }
-        }
-
-        listDiv.querySelectorAll('.combo-chip').forEach(chip => {
-            const cb = chip.querySelector('input[type="checkbox"]');
-            if (cb && cb.checked) {
-                chip.classList.add('active');
-            } else {
-                chip.classList.remove('active');
-            }
-        });
-
-        // Immediately update Select Subject dropdown box for active combinations
-        refreshSubjectDropdowns();
-    };
-
-    // Render checkable chips for applicable codes (checked by default)
-    applicableCodes.forEach(code => {
-        const label = document.createElement('label');
-        label.className = 'combo-chip active';
-
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.value = code;
-        cb.checked = true;
-        cb.onchange = () => syncSelectedCombosToSectionInput();
-
-        const txt = document.createElement('span');
-        txt.textContent = formatAudienceShortLabel(code);
-
-        label.appendChild(cb);
-        label.appendChild(txt);
-        listDiv.appendChild(label);
-    });
-
-    // Render Quick Action preset pill if multiple combinations exist
-    if (applicableCodes.length > 1) {
-        const selectAllPill = document.createElement('button');
-        selectAllPill.type = 'button';
-        selectAllPill.className = 'combo-preset-pill';
-        selectAllPill.textContent = '⚡ Combined (' + applicableCodes.join(' + ') + ')';
-        selectAllPill.onclick = () => {
-            listDiv.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = true; });
-            syncSelectedCombosToSectionInput();
-        };
-        presetsDiv.appendChild(selectAllPill);
-
-        const clearPill = document.createElement('button');
-        clearPill.type = 'button';
-        clearPill.className = 'combo-preset-pill';
-        clearPill.style.borderColor = 'rgba(239, 68, 68, 0.4)';
-        clearPill.style.color = '#f87171';
-        clearPill.textContent = '🧹 Select None';
-        clearPill.onclick = () => {
-            listDiv.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
-            syncSelectedCombosToSectionInput();
-        };
-        presetsDiv.appendChild(clearPill);
-    }
-
-    syncSelectedCombosToSectionInput();
+    if (directSectionSelect) directSectionSelect.style.display = '';
+    if (container) container.style.display = 'none';
 }
 
 function renderStreamPresets(config) {
@@ -5427,18 +5220,37 @@ function populateModalSectionOptions() {
 
     const options = [
         { val: 'COMMON', label: '1) Common to all classes (English, CONST, etc.)' },
-        { val: 'ALL', label: '2) Combined elective (Kan / Hin / San — ONLY under Combined)' },
-        { val: 'SHARED', label: '3) Specific Sections / Shared (select checkboxes below)' }
+        { val: 'ALL', label: '2) Combined elective (Kan / Hin / San — ONLY under Combined)' }
     ];
+
+    if (usesAudienceGroups(dept)) {
+        const auds = getAudienceOptions(dept);
+        auds.forEach((a, idx) => {
+            options.push({ val: a.val, label: `${idx + 3}) Specific Section — ${a.label || a.val}` });
+        });
+        options.push({ val: 'SHARED', label: `${auds.length + 3}) Multi-Section / Shared (Select combinations below)` });
+    } else if (dept === 'BCM' || dept === 'BCOM') {
+        options.push({ val: 'A', label: '3) Section A (General B.Com)' });
+        options.push({ val: 'B', label: '4) Section B (General B.Com)' });
+        options.push({ val: 'C (TP)', label: '5) Section C (TP - Tax Procedure)' });
+        options.push({ val: 'C (AF)', label: '6) Section C (AF - Accounting & Finance)' });
+        options.push({ val: 'SHARED', label: '7) Shared / Multi-Section' });
+    } else {
+        options.push({ val: 'A', label: '3) Section A' });
+        options.push({ val: 'B', label: '4) Section B' });
+        options.push({ val: 'C', label: '5) Section C' });
+        options.push({ val: 'SHARED', label: '6) Shared / Multi-Section' });
+    }
+
     const defaultVal = 'COMMON';
 
     if (scopeHint) {
         if (usesAudienceGroups(dept)) {
             scopeHint.innerHTML = dept === 'BSC'
-                ? '<strong>Common</strong> — English, CONST (all B.Sc. classes) &nbsp;·&nbsp; <strong>Combined</strong> — Kan/Hin/San (ONLY under Combined section) &nbsp;·&nbsp; <strong>Shared / Specific</strong> — select sections (e.g. Maths in MSCs, MPCs, MSP, MPC; Chem in BZC, MPC)'
-                : '<strong>Common</strong> — English, CONST (all B.A. classes) &nbsp;·&nbsp; <strong>Combined</strong> — Kan/Hin/San (ONLY under Combined section) &nbsp;·&nbsp; <strong>Shared / Specific</strong> — select sections (e.g. History in EHE, HEP)';
+                ? '<strong>Common</strong> — English, CONST (all B.Sc. classes) &nbsp;·&nbsp; <strong>Combined</strong> — Kan/Hin/San (ONLY under Combined section) &nbsp;·&nbsp; <strong>Specific / Shared</strong> — select sections (e.g. MSCs, MPCs, MSP, MPC, BZC)'
+                : '<strong>Common</strong> — English, CONST (all B.A. classes) &nbsp;·&nbsp; <strong>Combined</strong> — Kan/Hin/San (ONLY under Combined section) &nbsp;·&nbsp; <strong>Specific / Shared</strong> — select sections (e.g. EHE, HEP, JKP)';
         } else {
-            scopeHint.innerHTML = '<strong>Common</strong> — English / CONST (all classes) &nbsp;·&nbsp; <strong>Combined</strong> — Kan/Hin/San (ONLY under Combined section) &nbsp;·&nbsp; <strong>Shared / Specific</strong> — select sections (e.g. Sec A, Sec B)';
+            scopeHint.innerHTML = '<strong>Common</strong> — English / CONST (all classes) &nbsp;·&nbsp; <strong>Combined</strong> — Kan/Hin/San (ONLY under Combined section) &nbsp;·&nbsp; <strong>Specific / Shared</strong> — select sections (e.g. Sec A, Sec B)';
         }
     }
 
