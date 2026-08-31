@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mgm-absentee-informer-v70-bsc-ba-sections-slot-isolation';
+const CACHE_NAME = 'mgm-absentee-informer-v72-today-edit-prefix';
 // Do NOT precache app.js / index / css — mobile was stuck on broken cached JS after updates.
 // Network-first fetch handler still caches them after a successful live load.
 const ASSETS_TO_CACHE = [

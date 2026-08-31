@@ -462,7 +462,8 @@ body {
   border-radius: var(--radius-md);
 }
 
-.direct-form .form-group-full {
+.direct-form .form-group-full,
+.form-group-full {
   grid-column: 1 / -1;
   width: 100%;
 }
@@ -479,6 +480,58 @@ body {
   line-height: 1.45;
   padding: 12px 14px;
   font-family: inherit;
+}
+
+.roll-prefix-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.roll-prefix-bar > label {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.roll-prefix-input {
+  width: 7.5rem !important;
+  min-width: 5rem;
+  flex: 0 0 auto;
+  padding: 8px 10px !important;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.roll-prefix-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.9;
+  flex: 1 1 140px;
+}
+
+.roll-expand-preview {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  color: #6ee7b7;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+[data-theme="light"] .roll-expand-preview {
+  background: rgba(16, 185, 129, 0.08);
+  color: #047857;
+  border-color: rgba(16, 185, 129, 0.35);
 }
 
 /* Status Banner */
