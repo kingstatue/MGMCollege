@@ -1,4 +1,5 @@
-const CACHE_NAME = 'mgm-absentee-informer-v76-keyboard-fix';
+const CACHE_PREFIX = 'mgm-absentee-informer';
+const CACHE_NAME = 'mgm-absentee-informer-v78-isolate';
 // Do NOT precache app.js / index / css — mobile was stuck on broken cached JS after updates.
 // Network-first fetch handler still caches them after a successful live load.
 const ASSETS_TO_CACHE = [
@@ -6,6 +7,18 @@ const ASSETS_TO_CACHE = [
   './icon-192.png',
   './icon-512.png'
 ];
+
+function isOwnCache(name) {
+  return String(name || '').indexOf(CACHE_PREFIX) === 0;
+}
+
+function isOtherAppPath(pathname) {
+  const p = String(pathname || '');
+  return p.indexOf('/att_appAllstreams/') !== -1
+    || p.indexOf('/aaaacrypt/') !== -1
+    || p.indexOf('/MGMEC_absentee/') !== -1
+    || p.indexOf('/mgmec/') !== -1;
+}
 
 // Install Event - Precache icons only and skip waiting immediately
 self.addEventListener('install', (event) => {
@@ -18,14 +31,14 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Activate Event - Purge ALL other caches & claim clients immediately
+// Activate — purge ONLY this app's old caches (never touch BCA / Evening caches)
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
-            console.log('[PWA SW] Deleting old cache:', cache);
+          if (isOwnCache(cache) && cache !== CACHE_NAME) {
+            console.log('[PWA SW] Deleting old college cache:', cache);
             return caches.delete(cache);
           }
         })
@@ -41,6 +54,9 @@ self.addEventListener('fetch', (event) => {
 
   // Bypass cache for external APIs (Google Apps Script API)
   if (url.origin !== location.origin) return;
+
+  // Never intercept sibling apps if co-hosted on the same origin
+  if (isOtherAppPath(url.pathname)) return;
 
   const isCoreAsset = url.pathname.endsWith('.html') || url.pathname.endsWith('.js') || url.pathname.endsWith('.css') || url.pathname === '/' || url.pathname.endsWith('/');
 

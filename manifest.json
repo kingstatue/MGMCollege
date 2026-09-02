@@ -1,8 +1,10 @@
 {
+  "id": "/mgm-college-day-absentee/",
   "name": "MGM College Absentee Informer",
-  "short_name": "Absentee Informer",
-  "description": "Absentee logging portal for MGM College BCA faculty",
-  "start_url": "./index.html",
+  "short_name": "College Absentee",
+  "description": "Absentee logging portal for MGM Day College multi-stream faculty",
+  "start_url": "./index.html?app=college",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0f172a",

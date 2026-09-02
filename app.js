@@ -2742,21 +2742,10 @@ function demoteReplacedLocalSubjects(savedEntry) {
 
 function readAllHistory() {
     try {
+        // College-only history — never merge BCA/Evening keys (same-origin isolation)
         const rawMain = localStorage.getItem('mgm_attendance_history') || '[]';
-        const rawBca = localStorage.getItem('mgm_bca_attendance_history') || '[]';
         const listMain = JSON.parse(rawMain);
-        const listBca = JSON.parse(rawBca);
-
-        const byKey = new Map();
-        [...listMain, ...listBca].forEach(item => {
-            if (item) {
-                const k = entryKey(item) + '|' + (item.stream || 'BCA');
-                if (!byKey.has(k)) {
-                    byKey.set(k, item);
-                }
-            }
-        });
-        return Array.from(byKey.values());
+        return Array.isArray(listMain) ? listMain.filter(Boolean) : [];
     } catch (e) {
         return [];
     }
@@ -2789,7 +2778,6 @@ function compactAttendanceHistory(history) {
 function saveHistoryToLocalStorage(history) {
     const json = JSON.stringify(history);
     try { localStorage.setItem('mgm_attendance_history', json); } catch (e) {}
-    try { localStorage.setItem('mgm_bca_attendance_history', json); } catch (e) {}
 }
 
 function pruneOldHistory() {
@@ -3143,7 +3131,7 @@ function fetchFullSheetHistory(stream = currentDept || 'BCA') {
 function clearLocalHistoryCache() {
     if (confirm("Clear local browser history cache?\n\nThis will remove local cached entries and reload fresh entries directly from Google Sheet.")) {
         try { localStorage.removeItem('mgm_attendance_history'); } catch (e) {}
-        try { localStorage.removeItem('mgm_bca_attendance_history'); } catch (e) {}
+        // Do not touch mgm_bca_* / mgmec_* — those belong to other installed apps
         showCustomToast('🧹 Local Cache Cleared!', 'Fetching fresh entries from Google Sheet...');
     }
 }
@@ -5576,22 +5564,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function forceAppUpdate() {
     showCustomToast('🔄 Checking for App Updates...', 'All attendance history & offline logs remain 100% safe.');
-    if ('caches' in window) {
-        caches.keys().then(names => {
-            return Promise.all(names.map(name => caches.delete(name)));
-        }).then(() => {
-            if (navigator.serviceWorker) {
-                navigator.serviceWorker.getRegistrations().then(regs => {
-                    regs.forEach(reg => reg.unregister());
-                    setTimeout(() => window.location.reload(true), 500);
-                });
-            } else {
-                setTimeout(() => window.location.reload(true), 500);
-            }
-        });
-    } else {
-        setTimeout(() => window.location.reload(true), 500);
-    }
+    const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
+    const reloadSoon = () => setTimeout(() => window.location.reload(true), 500);
+    const clearOwn = () => {
+        if (!('caches' in window)) return Promise.resolve();
+        return caches.keys().then(names => Promise.all(
+            names.filter(n => String(n || '').indexOf(OWN_CACHE_PREFIX) === 0).map(n => caches.delete(n))
+        ));
+    };
+    const unregisterOwn = () => {
+        if (!navigator.serviceWorker || !navigator.serviceWorker.getRegistration) return Promise.resolve();
+        // Only this page's SW scope — never unregister BCA / Evening workers
+        return navigator.serviceWorker.getRegistration().then(reg => (reg ? reg.unregister() : undefined));
+    };
+    clearOwn().then(unregisterOwn).then(reloadSoon).catch(reloadSoon);
 }
 
 function toggleSharedCombinationsUI(preselectedSection) {
@@ -5872,15 +5858,18 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v70_today_edit_roll_prefix';
+    const APP_VER = 'v71_isolate';
+    const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
         localStorage.setItem('mgm_app_ver', APP_VER);
-        // One-time purge of stale mobile PWA caches after version bump
+        // One-time purge of THIS app's stale caches only (never BCA / Evening)
         try {
             if (window.caches && caches.keys) {
                 caches.keys().then(function (names) {
-                    return Promise.all(names.map(function (n) { return caches.delete(n); }));
+                    return Promise.all(names.filter(function (n) {
+                        return String(n || '').indexOf(OWN_CACHE_PREFIX) === 0;
+                    }).map(function (n) { return caches.delete(n); }));
                 }).then(function () {
                     if (sessionStorage.getItem('mgm_ver_reloaded') === APP_VER) return;
                     sessionStorage.setItem('mgm_ver_reloaded', APP_VER);

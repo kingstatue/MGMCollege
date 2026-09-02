@@ -24,7 +24,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
-  <link rel="stylesheet" href="styles.css?v=v32.8">
+  <link rel="stylesheet" href="styles.css?v=v32.9-isolate">
 </head>
 <body>
 
@@ -97,14 +97,17 @@
       (function () {
         function mgmForceRefresh() {
           var done = function () { window.location.reload(); };
+          var OWN_CACHE_PREFIX = 'mgm-absentee-informer';
           try {
             if (window.caches && caches.keys) {
               caches.keys().then(function (names) {
-                return Promise.all(names.map(function (n) { return caches.delete(n); }));
+                return Promise.all(names.filter(function (n) {
+                  return String(n || '').indexOf(OWN_CACHE_PREFIX) === 0;
+                }).map(function (n) { return caches.delete(n); }));
               }).then(function () {
-                if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
-                  return navigator.serviceWorker.getRegistrations().then(function (regs) {
-                    regs.forEach(function (r) { r.unregister(); });
+                if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) {
+                  return navigator.serviceWorker.getRegistration().then(function (reg) {
+                    if (reg) return reg.unregister();
                   });
                 }
               }).then(done).catch(done);
@@ -888,8 +891,8 @@
 
   <datalist id="subjectDatalist"></datalist>
 
-  <script src="parser.js?v=v74"></script>
-  <script src="app.js?v=v74"></script>
+  <script src="parser.js?v=v75-isolate"></script>
+  <script src="app.js?v=v75-isolate"></script>
 <!-- Bulk Past Class Generator Modal -->
     <div class="modal-overlay" id="bulkGeneratorModal">
       <div class="modal-card" style="max-width: 460px;">
