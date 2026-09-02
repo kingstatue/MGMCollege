@@ -1187,9 +1187,8 @@ function getTodayISOString() {
     return `${yyyy}-${mm}-${dd}`;
 }
 
-/** Attendance entry: today + past 3 days only (no tomorrow). */
-const ATTENDANCE_DATE_PAST_DAYS = 3;
-/** Parent Informer may review older reports. */
+/** Attendance entry (Mark Absentees / Today edit): any past date + today; never future. */
+/** Parent Informer may review older reports within this window. */
 const HOD_DATE_PAST_DAYS = 30;
 
 function addDaysISO(isoDate, deltaDays) {
@@ -1204,12 +1203,12 @@ function addDaysISO(isoDate, deltaDays) {
 
 function applyAttendanceDateLimits() {
     const today = getTodayISOString();
-    const minAtt = addDaysISO(today, -ATTENDANCE_DATE_PAST_DAYS);
+    // Mark Absentees + Today edit: past + today only (no future)
     [dateInput, directDateInput].forEach(el => {
         if (!el) return;
-        el.min = minAtt;
+        el.removeAttribute('min');
         el.max = today;
-        if (!el.value || el.value > today || el.value < minAtt) {
+        if (!el.value || el.value > today) {
             el.value = today;
         }
     });
@@ -1229,9 +1228,36 @@ function applyAttendanceDateLimits() {
 
 function isAttendanceDateAllowed(dateStr) {
     const today = getTodayISOString();
-    const minAtt = addDaysISO(today, -ATTENDANCE_DATE_PAST_DAYS);
     const d = String(dateStr || '').trim();
-    return !!d && d >= minAtt && d <= today;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+    return d <= today;
+}
+
+/** Clamp Mark Absentees / edit date fields if a future day is chosen. */
+function enforceNoFutureAttendanceDate(el) {
+    if (!el) return false;
+    const today = getTodayISOString();
+    el.max = today;
+    if (el.value && el.value > today) {
+        alert('⚠️ Future date disabled. Classes for tomorrow or future dates have not been conducted yet.\n\nYou can enter absentees for today or any previous date only.');
+        el.value = today;
+        return true;
+    }
+    return false;
+}
+
+function bindAttendanceDateGuards() {
+    [directDateInput, dateInput].forEach(el => {
+        if (!el || el.dataset.noFutureBound === '1') return;
+        el.dataset.noFutureBound = '1';
+        const run = () => {
+            enforceNoFutureAttendanceDate(el);
+            applyAttendanceDateLimits();
+        };
+        el.addEventListener('change', run);
+        el.addEventListener('input', run);
+        el.addEventListener('blur', run);
+    });
 }
 
 
@@ -1482,7 +1508,10 @@ function processDirectVoiceSpeech(text) {
     if (parsed.section && directSectionSelect) directSectionSelect.value = parsed.section;
     if (parsed.slot && directSlotSelect) directSlotSelect.value = String(parsed.slot);
     if (parsed.subject && directSubjectInput) setSubjectValue(directSubjectInput, parsed.subject);
-    if (parsed.date && directDateInput) directDateInput.value = parsed.date;
+    if (parsed.date && directDateInput) {
+        directDateInput.value = parsed.date;
+        enforceNoFutureAttendanceDate(directDateInput);
+    }
 
     // 3. Trigger auto-combined elective section update
     if (typeof checkLanguageElectiveAutoCombined === 'function') {
@@ -1528,6 +1557,7 @@ function autoProcessSpeech(text) {
 
     // Sync values into direct form
     directDateInput.value = todayStr;
+    enforceNoFutureAttendanceDate(directDateInput);
     directRollInput.value = Array.isArray(parsedData.rollNumbers) ? parsedData.rollNumbers.join(', ') : parsedData.rollNumbers;
     directYearSelect.value = parsedData.year || '';
     directSectionSelect.value = parsedData.section || '';
@@ -1562,6 +1592,9 @@ function openConfirmationModal(data) {
     const deptConfig = DEPT_CONFIG[currentDept] || DEPT_CONFIG.BCA;
 
     dateInput.value = data.date || getTodayISOString();
+    if (dateInput.value > getTodayISOString()) dateInput.value = getTodayISOString();
+    applyAttendanceDateLimits();
+    enforceNoFutureAttendanceDate(dateInput);
     rollNumbersInput.value = Array.isArray(data.rollNumbers) ? data.rollNumbers.join(', ') : data.rollNumbers;
     yearSelect.value = data.year || 'First Year';
     sectionSelect.value = data.section || 'A';
@@ -1912,8 +1945,12 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
     } catch (e) {}
 
     if (!isAttendanceDateAllowed(cleanDate)) {
-        alert('Date must be today or within the last ' + ATTENDANCE_DATE_PAST_DAYS + ' days. Future dates are not allowed.');
+        alert('⚠️ Future dates are not allowed. Enter absentees for today or a previous date only (classes must already have been held).');
         applyAttendanceDateLimits();
+        try {
+            if (dateInput) enforceNoFutureAttendanceDate(dateInput);
+            if (directDateInput) enforceNoFutureAttendanceDate(directDateInput);
+        } catch (e) {}
         return { status: 'cancelled' };
     }
 
@@ -3315,6 +3352,9 @@ function editHistoryEntry(index, sourceList) {
     const deptConfig = DEPT_CONFIG[currentDept] || DEPT_CONFIG.BCA;
     const cfg = DEPT_CONFIG[currentDept] || DEPT_CONFIG.BCA;
     dateInput.value = item.date || getTodayISOString();
+    if (dateInput.value > getTodayISOString()) dateInput.value = getTodayISOString();
+    applyAttendanceDateLimits();
+    enforceNoFutureAttendanceDate(dateInput);
     rollNumbersInput.value = item.rollNumbers === 'NIL' ? '' : (Array.isArray(item.rollNumbers) ? item.rollNumbers.join(', ') : item.rollNumbers);
     yearSelect.value = item.year || 'First Year';
 
@@ -3332,6 +3372,7 @@ function editHistoryEntry(index, sourceList) {
     slotSelect.value = item.slot ? item.slot.toString() : '1';
 
     directDateInput.value = dateInput.value;
+    enforceNoFutureAttendanceDate(directDateInput);
     directRollInput.value = rollNumbersInput.value;
     directYearSelect.value = yearSelect.value;
     updateSectionSelects(cfg.hasSections !== false, currentDept, directYearSelect.value);
@@ -5131,6 +5172,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (dateInput) dateInput.value = todayStr;
     if (directDateInput) directDateInput.value = todayStr;
     applyAttendanceDateLimits();
+    bindAttendanceDateGuards();
     try { updateMarkAbsenteesStepUI(); } catch (e) {}
     try { restoreAppViewport(); } catch (e) {}
     try {
