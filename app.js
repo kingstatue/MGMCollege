@@ -1621,23 +1621,43 @@ function closeConfirmationModal() {
     statusPill.className = 'status-pill';
     statusText.textContent = 'Tap microphone to speak';
     try { lockAppScroll(false); } catch (e) {}
-    try { restoreAppViewport(); } catch (e) {}
+    try { restoreAppViewport({ force: true }); } catch (e) {}
 }
 
-/** Keep Today / Mark Absentees tabs visible after edit/modals (prevents page shift). */
-function restoreAppViewport() {
+/** Keep header / mode tabs visible after edit/modals (prevents page shift). */
+function isEditableFocused() {
     try {
+        const active = document.activeElement;
+        if (!active || active === document.body || active === document.documentElement) return false;
+        const tag = String(active.tagName || '').toUpperCase();
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        if (active.isContentEditable) return true;
+    } catch (e) {}
+    return false;
+}
+
+function restoreAppViewport(opts) {
+    opts = opts || {};
+    try {
+        // Keyboard open triggers resize — never steal focus while typing
+        if (isEditableFocused() && !opts.force) return;
+
         window.scrollTo(0, 0);
         if (document.documentElement) document.documentElement.scrollTop = 0;
         if (document.body) document.body.scrollTop = 0;
         const frame = document.getElementById('appFrame') || document.querySelector('.app-frame');
         if (frame) frame.scrollTop = 0;
-        const appBody = document.querySelector('.app-body');
-        if (appBody) appBody.scrollTop = 0;
-        const active = document.activeElement;
-        if (active && active !== document.body && typeof active.blur === 'function') {
-            const keepFocus = active.closest && active.closest('.modal-overlay.active, .history-drawer.active, .dept-login-overlay.active');
-            if (!keepFocus) active.blur();
+        if (!isEditableFocused()) {
+            const appBody = document.querySelector('.app-body');
+            if (appBody) appBody.scrollTop = 0;
+        }
+        // Only clear focus left inside a closed overlay (not live typing fields)
+        if (opts.force) {
+            const active = document.activeElement;
+            if (active && active.closest && typeof active.blur === 'function') {
+                const dead = active.closest('.modal-overlay:not(.active), .history-drawer:not(.active)');
+                if (dead) active.blur();
+            }
         }
     } catch (e) {}
 }
@@ -1653,7 +1673,7 @@ function lockAppScroll(locked) {
         } else {
             document.documentElement.style.overflow = '';
             document.body.style.overflow = '';
-            restoreAppViewport();
+            restoreAppViewport({ force: true });
         }
     } catch (e) {}
 }
@@ -1667,7 +1687,7 @@ function setHistoryDrawerOpen(isOpen) {
     try {
         document.body.classList.toggle('history-drawer-open', !!isOpen);
         lockAppScroll(!!isOpen);
-        if (!isOpen) restoreAppViewport();
+        if (!isOpen) restoreAppViewport({ force: true });
     } catch (e) {}
 }
 
@@ -5176,15 +5196,21 @@ document.addEventListener('DOMContentLoaded', () => {
     try { updateMarkAbsenteesStepUI(); } catch (e) {}
     try { restoreAppViewport(); } catch (e) {}
     try {
-        window.addEventListener('orientationchange', () => setTimeout(restoreAppViewport, 120));
+        window.addEventListener('orientationchange', () => {
+            setTimeout(() => {
+                if (!isEditableFocused()) restoreAppViewport({ force: true });
+            }, 120);
+        });
         window.addEventListener('resize', () => {
-            // After keyboard close / rotation, snap top chrome back into view
+            // Keyboard open/close fires resize — skip while typing or keyboard stays up
+            if (isEditableFocused()) return;
             if (!document.querySelector('.modal-overlay.active, .history-drawer.active')) {
                 restoreAppViewport();
             }
         });
         if (window.visualViewport) {
             window.visualViewport.addEventListener('resize', () => {
+                if (isEditableFocused()) return;
                 try {
                     window.scrollTo(0, 0);
                     document.documentElement.scrollTop = 0;
@@ -5329,7 +5355,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (elem) {
             const run = () => {
                 if (elem === subjectInput || elem === sectionSelect) checkLanguageElectiveAutoCombined(subjectInput.value, sectionSelect, yearSelect);
-                refreshAllSlotDropdowns();
+                // Do not rebuild slot list while typing rolls (causes field/keyboard flash)
+                if (elem !== rollNumbersInput) refreshAllSlotDropdowns();
                 updateModalDoubleEntryCheck();
             };
             elem.addEventListener('change', run);
@@ -5341,7 +5368,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (elem) {
             const run = () => {
                 if (elem === directSubjectInput || elem === directSectionSelect) checkLanguageElectiveAutoCombined(directSubjectInput.value, directSectionSelect, directYearSelect);
-                refreshAllSlotDropdowns();
+                if (elem !== directRollInput) refreshAllSlotDropdowns();
                 updateDirectDoubleEntryCheck();
                 try { updateMarkAbsenteesStepUI(); } catch (e) {}
             };
