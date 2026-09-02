@@ -156,25 +156,37 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+html {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   font-family: var(--font-family);
   background-color: var(--bg-main);
   color: var(--text-main);
+  height: 100%;
   min-height: 100vh;
+  min-height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
   display: flex;
   justify-content: center;
   align-items: center;
   padding: 12px;
-  overflow-x: hidden;
+  overflow: hidden;
+  overscroll-behavior: none;
   transition: background-color var(--transition-smooth);
+  position: relative;
 }
 
 /* Mobile Container Frame */
 .app-frame {
   width: 100%;
   max-width: 440px;
-  height: 94vh;
-  max-height: 900px;
+  height: calc(100dvh - 24px);
+  max-height: min(900px, calc(100dvh - 24px));
   background: var(--bg-main);
   border: 1px solid var(--bg-card-border);
   border-radius: var(--radius-lg);
@@ -184,6 +196,7 @@ body {
   position: relative;
   overflow: hidden;
   backdrop-filter: blur(16px);
+  flex-shrink: 0;
 }
 
 /* Header */
@@ -194,7 +207,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  z-index: 10;
+  z-index: 20;
+  flex-shrink: 0;
+  position: relative;
 }
 
 .brand {
@@ -384,12 +399,16 @@ body {
 /* Main Content Area */
 .app-body {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 16px;
   gap: 16px;
+  overflow-x: hidden;
   overflow-y: auto;
   position: relative;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 /* Mode Switcher Segmented Tabs */
@@ -400,6 +419,11 @@ body {
   border-radius: var(--radius-full);
   padding: 4px;
   gap: 4px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.35);
 }
 
 .mode-tab {
@@ -941,6 +965,7 @@ body {
   left: 0;
   width: 100%;
   height: 100%;
+  height: 100dvh;
   background: rgba(15, 23, 42, 0.85);
   backdrop-filter: blur(12px);
   display: flex;
@@ -950,6 +975,7 @@ body {
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--transition-smooth);
+  overscroll-behavior: contain;
 }
 
 .modal-overlay.active {
@@ -962,8 +988,10 @@ body {
   border-top: 1px solid var(--bg-card-border);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   padding: 22px;
-  max-height: 90vh;
+  max-height: min(90vh, 90dvh);
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   transform: translateY(100%);
   transition: transform var(--transition-smooth);
   display: flex;
@@ -1122,8 +1150,8 @@ body {
   top: 50%;
   width: min(calc(100vw - 24px), 440px);
   max-width: 440px;
-  height: 94vh;
-  max-height: 900px;
+  height: calc(100dvh - 24px);
+  max-height: min(900px, calc(100dvh - 24px));
   margin: 0;
   background: var(--bg-main);
   z-index: 200000;
@@ -1908,6 +1936,13 @@ body.history-drawer-open #appFrame {
     flex-wrap: wrap;
     row-gap: 8px;
   }
+  .app-body {
+    padding: 12px;
+    gap: 12px;
+  }
+  .mode-switcher {
+    top: -1px;
+  }
   .brand {
     flex: 1 1 100%;
     justify-content: flex-start;
@@ -1951,7 +1986,7 @@ body.history-drawer-open #appFrame {
     font-size: 0.75rem;
     gap: 4px;
   }
-  }
+}
 
 /* Combination Checkboxes Panel for BSC & Audience Streams */
 .combo-checkbox-panel {
