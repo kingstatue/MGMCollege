@@ -888,6 +888,26 @@ function isSameAttendanceIdentity(a, b) {
         && (a.stream || 'BCA') === (b.stream || 'BCA');
 }
 
+/** Bulk Past Generator rows (shortage backfill). */
+function isBulkPastEntry(entry) {
+    if (!entry) return false;
+    if (entry.bulkPast === true) return true;
+    return String(entry.timestamp || '') === 'Bulk Past Entry';
+}
+
+/**
+ * Gate for shortage backfill only:
+ * When EDITING a bulk-past row, a different subject on the same slot is NOT a conflict.
+ * New daily Mark Absentees keeps full slot conflict behavior.
+ */
+function shouldIgnoreOtherSubjectSlotConflict(editOrig, otherEntry, incomingSubject) {
+    if (!editOrig || !isBulkPastEntry(editOrig)) return false;
+    if (!otherEntry) return false;
+    const peerSubj = (otherEntry && typeof otherEntry === 'object') ? otherEntry.subject : otherEntry;
+    if (subjectsAreSame(peerSubj, incomingSubject || editOrig.subject)) return false;
+    return true;
+}
+
 function findCombinedVsSectionBlockEntry(history, cleanStream, cleanDate, cleanYear, cleanSlot, cleanSection, skipEntry) {
     return (history || []).find(item => {
         if ((item.stream || 'BCA') !== cleanStream) return false;
@@ -982,6 +1002,11 @@ function checkDoubleEntryLive(dateVal, yearVal, sectionVal, subjectVal, slotVal,
 
         const sameCommonEng = normalizeSectionCode(sec1) === 'COMMON' && normalizeSectionCode(sec2) === 'COMMON';
         if (sameCommonEng && cleanSubject && itemSubj && !subjectsAreSame(cleanSubject, itemSubj)) {
+            return false;
+        }
+
+        // Bulk-past edit only: other subjects on this slot are allowed
+        if (shouldIgnoreOtherSubjectSlotConflict(skipSelf, item, cleanSubject)) {
             return false;
         }
 
@@ -2054,6 +2079,9 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
         } else if (allowsParallelSubjects(cleanStream) && sheetConflict.subject &&
             !subjectsAreSame(sheetConflict.subject, cleanSubject)) {
             sheetConflict = { exists: false, parallelAudience: true };
+        } else if (shouldIgnoreOtherSubjectSlotConflict(editOrig, sheetConflict, cleanSubject)) {
+            // Editing bulk-past row: peer subject on same slot is fine (shortage backfill)
+            sheetConflict = { exists: false, bulkPastPeer: true };
         } else if (isCombinedVsSpecificSectionConflict(sheetSec, cleanSection)) {
             await showCombinedSectionBlockDialog({
                 date: cleanDate,
@@ -2108,11 +2136,16 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
             return false;
         }
 
+        // Bulk-past edit only: other subjects on this slot are allowed
+        if (shouldIgnoreOtherSubjectSlotConflict(editOrig, item, cleanSubject)) {
+            return false;
+        }
+
         return true;
     });
 
     const isEditingMode = !!editOrig;
-    const hasConflict = isEditingMode || !!existingEntry || (sheetConflict.exists && !sheetConflict.offline && !sheetConflict.editingSelf && !sheetConflict.parallelElective && !sheetConflict.parallelAudience);
+    const hasConflict = isEditingMode || !!existingEntry || (sheetConflict.exists && !sheetConflict.offline && !sheetConflict.editingSelf && !sheetConflict.parallelElective && !sheetConflict.parallelAudience && !sheetConflict.bulkPastPeer);
     let finalRolls = formattedRolls;
     let finalRollsArr = rollNumbersArray;
     let conflictChoice = isEditingMode ? 'replace' : 'create';
@@ -2209,11 +2242,15 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
             ...payload,
             offline: false,
             syncNote: '',
+            bulkPast: !!(editOrig && isBulkPastEntry(editOrig)),
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
 
         saveToLocalHistory(recordPayload);
-        demoteReplacedLocalSubjects(payload);
+        // Never demote peer subjects when saving a bulk-past edit (shortage backfill)
+        if (!(editOrig && isBulkPastEntry(editOrig))) {
+            demoteReplacedLocalSubjects(payload);
+        }
         if (editingMoved && editOrig) {
             await removeMovedEditOriginal(editOrig);
         }
@@ -2231,6 +2268,7 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
             ...payload,
             offline: true,
             syncNote: 'Pending Sync',
+            bulkPast: !!(editOrig && isBulkPastEntry(editOrig)),
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
         saveToLocalHistory(recordPayload);
@@ -2720,6 +2758,7 @@ function slotSheetKey(item) {
  */
 function demoteReplacedLocalSubjects(savedEntry) {
     if (allowsParallelSubjects(savedEntry.stream || currentDept)) return;
+    if (isBulkPastEntry(savedEntry)) return;
     const savedKey = slotSheetKey(savedEntry);
     const savedSubj = String(savedEntry.subject || '').trim().toLowerCase();
     const history = readAllHistory();
@@ -3354,7 +3393,9 @@ function editHistoryEntry(index, sourceList) {
         subject: item.subject,
         slot: item.slot,
         stream: item.stream || currentDept || 'BCA',
-        rollNumbers: item.rollNumbers
+        rollNumbers: item.rollNumbers,
+        bulkPast: isBulkPastEntry(item),
+        timestamp: item.timestamp || ''
     };
 
     const deptConfig = DEPT_CONFIG[currentDept] || DEPT_CONFIG.BCA;
@@ -3481,14 +3522,14 @@ async function executeBulkPastGenerator() {
     const yearEl = document.getElementById('bulkYearSelect');
     const secEl = document.getElementById('bulkSectionSelect');
     const subjEl = document.getElementById('bulkSubjectInput');
-    const slotEl = document.getElementById('bulkSlotSelect');
     const startEl = document.getElementById('bulkStartDate');
     const endEl = document.getElementById('bulkEndDate');
 
     const yearVal = yearEl ? yearEl.value : '';
     const secVal = secEl ? secEl.value : '';
     const subjVal = subjEl ? subjEl.value : '';
-    const slotVal = slotEl ? slotEl.value : '1';
+    // Slot ignored for bulk shortage backfill — always Slot 1 (no cross-staff conflict)
+    const slotVal = '1';
     const startVal = startEl ? startEl.value : '';
     const endVal = endEl ? endEl.value : '';
     const checkedDays = Array.from(document.querySelectorAll('.bulkDayCheck:checked')).map(c => parseInt(c.value, 10));
@@ -3541,8 +3582,9 @@ async function executeBulkPastGenerator() {
                     year: yearVal,
                     section: secVal,
                     subject: subjVal,
-                    slot: String(parseInt(slotVal, 10) || 1),
+                    slot: '1',
                     rollNumbers: 'NIL',
+                    bulkPast: true,
                     offline: false,
                     timestamp: 'Bulk Past Entry'
                 });
@@ -3562,7 +3604,7 @@ async function executeBulkPastGenerator() {
 
         closeBulkGeneratorModal();
 
-        showCustomToast(`⚡ Created ${generatedItems.length} Past Classes!`, `Added for ${yearVal} Sec ${secVal} (${subjVal}). You can now edit absentees.`);
+        showCustomToast(`⚡ Created ${generatedItems.length} Past Classes!`, `Added for ${yearVal} Sec ${secVal} (${subjVal}). Edit absentees anytime — no slot fights with other subjects.`);
         renderHistoryList();
 
         // Perform Google Sheets sync asynchronously in background without freezing UI
@@ -3580,6 +3622,7 @@ async function executeBulkPastGenerator() {
                     section: item.section,
                     subject: item.subject,
                     slot: item.slot,
+                    bulkPast: true,
                     changesSummary: 'Bulk Past Class Entry'
                 });
                 try {
@@ -5858,7 +5901,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v71_isolate';
+    const APP_VER = 'v72_bulk_past_slot_gate';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
