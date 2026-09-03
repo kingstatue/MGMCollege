@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'mgm-absentee-informer';
-const CACHE_NAME = 'mgm-absentee-informer-v80-bulkfix';
+const CACHE_NAME = 'mgm-absentee-informer-v81-update';
 // Do NOT precache app.js / index / css — mobile was stuck on broken cached JS after updates.
 // Network-first fetch handler still caches them after a successful live load.
 const ASSETS_TO_CACHE = [
@@ -47,6 +47,13 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Allow page bootstrap to force activate waiting worker
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
 // Fetch Event - ALWAYS NETWORK FIRST for HTML, JS, CSS so app updates automatically when online
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
@@ -57,6 +64,9 @@ self.addEventListener('fetch', (event) => {
 
   // Never intercept sibling apps if co-hosted on the same origin
   if (isOtherAppPath(url.pathname)) return;
+
+  // Always hit network for version.json (update detection must not use stale cache)
+  if (url.pathname.endsWith('/version.json') || url.pathname.endsWith('version.json')) return;
 
   const isCoreAsset = url.pathname.endsWith('.html') || url.pathname.endsWith('.js') || url.pathname.endsWith('.css') || url.pathname === '/' || url.pathname.endsWith('/');
 

@@ -5607,41 +5607,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     renderHistoryList();
 
-    // PWA Service Worker with Auto Update Capability
+    // SW already registered from index.html bootstrap (versioned URL + version.json).
+    // Keep a backup update check here in case bootstrap was bypassed.
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('./sw.js')
-                .then(reg => {
-                    console.log('[PWA] Service Worker Registered:', reg.scope);
-                    reg.update(); // Force check for SW update on every app launch
-
-                    reg.onupdatefound = () => {
-                        const installingWorker = reg.installing;
-                        if (installingWorker) {
-                            installingWorker.onstatechange = () => {
-                                if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                                    showCustomToast(
-                                        '⚡ App Updated to Latest Version!',
-                                        'Loading updated department structures & features...'
-                                    );
-                                    setTimeout(() => {
-                                        window.location.reload(true);
-                                    }, 800);
-                                }
-                            };
-                        }
-                    };
-                })
-                .catch(err => console.warn('[PWA] Service Worker Registration failed:', err));
-        });
-
-        let refreshing = false;
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-            if (!refreshing) {
-                refreshing = true;
-                window.location.reload(true);
+        navigator.serviceWorker.getRegistration().then(function (reg) {
+            if (reg) {
+                try { reg.update(); } catch (e) {}
             }
-        });
+        }).catch(function () {});
     }
 });
 
@@ -5649,6 +5622,24 @@ function forceAppUpdate() {
     showCustomToast('🔄 Checking for App Updates...', 'All attendance history & offline logs remain 100% safe.');
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     const reloadSoon = () => setTimeout(() => window.location.reload(true), 500);
+
+    // Prefer published version.json so phones detect a real deploy when online
+    const tryVersionThenNuke = () => {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            return Promise.resolve(null);
+        }
+        return fetch('./version.json?t=' + Date.now(), { cache: 'no-store' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                const ver = (data && (data.version || data.v)) || '';
+                if (ver) {
+                    try { localStorage.setItem('mgm_shell_ver', ver); } catch (e) {}
+                }
+                return ver;
+            })
+            .catch(function () { return null; });
+    };
+
     const clearOwn = () => {
         if (!('caches' in window)) return Promise.resolve();
         return caches.keys().then(names => Promise.all(
@@ -5660,7 +5651,7 @@ function forceAppUpdate() {
         // Only this page's SW scope — never unregister BCA / Evening workers
         return navigator.serviceWorker.getRegistration().then(reg => (reg ? reg.unregister() : undefined));
     };
-    clearOwn().then(unregisterOwn).then(reloadSoon).catch(reloadSoon);
+    tryVersionThenNuke().then(clearOwn).then(unregisterOwn).then(reloadSoon).catch(reloadSoon);
 }
 
 function toggleSharedCombinationsUI(preselectedSection) {
@@ -5941,7 +5932,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v73_bulk_quiet_edit';
+    const APP_VER = 'v74_shell_version_json';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');

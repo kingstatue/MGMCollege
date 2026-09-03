@@ -24,7 +24,127 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
-  <link rel="stylesheet" href="styles.css?v=v32.11-bulkfix">
+  <link rel="stylesheet" href="styles.css?v=v32.12-update">
+  <script>
+    // Auto-update after GitHub Pages deploy (runs before app.js) — does not touch attendance data
+    (function () {
+      var EXPECTED = 'v32.12-update';
+      var KEY = 'mgm_shell_ver';
+      var OWN_CACHE_PREFIX = 'mgm-absentee-informer';
+      var reloading = false;
+
+      function hardReload() {
+        if (reloading || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+        reloading = true;
+        var finish = function () {
+          try { sessionStorage.setItem('mgm_just_updated', EXPECTED); } catch (e) {}
+          window.location.reload();
+        };
+        try {
+          var p = Promise.resolve();
+          if (window.caches && caches.keys) {
+            p = caches.keys().then(function (names) {
+              return Promise.all(names.filter(function (n) {
+                return String(n || '').indexOf(OWN_CACHE_PREFIX) === 0;
+              }).map(function (n) { return caches.delete(n); }));
+            });
+          }
+          p.then(function () {
+            if (!navigator.serviceWorker || !navigator.serviceWorker.getRegistration) {
+              finish();
+              return;
+            }
+            // Only this page's SW — never unregister Allstreams / Evening
+            return navigator.serviceWorker.getRegistration().then(function (reg) {
+              return reg ? reg.unregister() : undefined;
+            }).then(finish).catch(finish);
+          }).catch(finish);
+        } catch (e) {
+          finish();
+        }
+      }
+
+      function applyNewVersion(ver) {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
+        var prev = '';
+        try { prev = localStorage.getItem(KEY) || ''; } catch (e) {}
+        if (!prev) {
+          try { localStorage.setItem(KEY, ver); } catch (e2) {}
+          return false;
+        }
+        if (prev !== ver) {
+          try { localStorage.setItem(KEY, ver); } catch (e2) {}
+          hardReload();
+          return true;
+        }
+        return false;
+      }
+
+      // 1) Compare published version.json (ONLY when online)
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        fetch('./version.json?t=' + Date.now(), { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            var ver = (data && (data.version || data.v)) || EXPECTED;
+            applyNewVersion(ver);
+          })
+          .catch(function () {});
+      } else {
+        try { localStorage.setItem(KEY, EXPECTED); } catch (e) {}
+      }
+
+      // 2) Register SW with versioned URL so GitHub Pages cannot keep old sw.js forever
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          var swUrl = './sw.js?v=v81-update';
+          navigator.serviceWorker.register(swUrl, { updateViaCache: 'none' })
+            .then(function (reg) {
+              if (navigator.onLine) {
+                try { reg.update(); } catch (e) {}
+              }
+              function watch(worker) {
+                if (!worker) return;
+                worker.addEventListener('statechange', function () {
+                  if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+                    try { worker.postMessage({ type: 'SKIP_WAITING' }); } catch (e) {}
+                  }
+                });
+              }
+              if (reg.waiting) {
+                try { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); } catch (e) {}
+              }
+              reg.addEventListener('updatefound', function () {
+                watch(reg.installing);
+              });
+              document.addEventListener('visibilitychange', function () {
+                if (document.visibilityState === 'visible' && navigator.onLine) {
+                  try { reg.update(); } catch (e) {}
+                  fetch('./version.json?t=' + Date.now(), { cache: 'no-store' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                      var ver = (data && (data.version || data.v)) || EXPECTED;
+                      applyNewVersion(ver);
+                    })
+                    .catch(function () {});
+                }
+              });
+            })
+            .catch(function () {});
+
+          var refreshing = false;
+          navigator.serviceWorker.addEventListener('controllerchange', function () {
+            if (refreshing || !navigator.onLine) return;
+            refreshing = true;
+            window.location.reload();
+          });
+        });
+      }
+
+      // Expose for "Check for App Updates" button
+      window.mgmApplyShellVersion = applyNewVersion;
+      window.mgmHardReloadShell = hardReload;
+    })();
+  </script>
 </head>
 <body>
 
@@ -891,8 +1011,8 @@
 
   <datalist id="subjectDatalist"></datalist>
 
-  <script src="parser.js?v=v77-bulkfix"></script>
-  <script src="app.js?v=v77-bulkfix"></script>
+  <script src="parser.js?v=v78-update"></script>
+  <script src="app.js?v=v78-update"></script>
 <!-- Bulk Past Class Generator Modal -->
     <div class="modal-overlay" id="bulkGeneratorModal">
       <div class="modal-card" style="max-width: 460px;">
