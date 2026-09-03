@@ -896,15 +896,28 @@ function isBulkPastEntry(entry) {
 }
 
 /**
- * Gate for shortage backfill only:
- * When EDITING a bulk-past row, a different subject on the same slot is NOT a conflict.
- * New daily Mark Absentees keeps full slot conflict behavior.
+ * Gate for shortage backfill / history edit:
+ * When EDITING an existing row, a different subject on the same slot is NOT a conflict
+ * (multiple bulk NIL subjects share Slot 1). New daily Mark Absentees (no editOrig) stays strict.
  */
 function shouldIgnoreOtherSubjectSlotConflict(editOrig, otherEntry, incomingSubject) {
-    if (!editOrig || !isBulkPastEntry(editOrig)) return false;
-    if (!otherEntry) return false;
+    if (!editOrig || !otherEntry) return false;
     const peerSubj = (otherEntry && typeof otherEntry === 'object') ? otherEntry.subject : otherEntry;
-    if (subjectsAreSame(peerSubj, incomingSubject || editOrig.subject)) return false;
+    const incoming = incomingSubject || editOrig.subject;
+    // Same subject = the row being updated — not a "peer" to ignore
+    if (subjectsAreSame(peerSubj, incoming)) return false;
+    return true;
+}
+
+/** True when saving an edit of the same subject row with no peer/slot fight left. */
+function isQuietHistoryEdit(editOrig, editingSelf, existingEntry, sheetConflict) {
+    if (!editOrig || !editingSelf) return false;
+    if (existingEntry) return false;
+    if (sheetConflict && sheetConflict.exists && !sheetConflict.offline &&
+        !sheetConflict.editingSelf && !sheetConflict.parallelElective &&
+        !sheetConflict.parallelAudience && !sheetConflict.bulkPastPeer) {
+        return false;
+    }
     return true;
 }
 
@@ -981,7 +994,7 @@ function checkDoubleEntryLive(dateVal, yearVal, sectionVal, subjectVal, slotVal,
     const existingEntry = localHistory.find(item => {
         if ((item.stream || 'BCA') !== cleanStream) return false;
         if (normalizeHistoryDate(item.date) !== normalizeHistoryDate(cleanDate)) return false;
-        if (item.year !== cleanYear) return false;
+        if (!isYearMatching(item.year, cleanYear)) return false;
         if (parseInt(item.slot, 10) !== cleanSlot) return false;
         if (skipSelf && isSameAttendanceIdentity(item, skipSelf)) return false;
 
@@ -1005,7 +1018,7 @@ function checkDoubleEntryLive(dateVal, yearVal, sectionVal, subjectVal, slotVal,
             return false;
         }
 
-        // Bulk-past edit only: other subjects on this slot are allowed
+        // History edit: other subjects on this slot are allowed (bulk NIL share Slot 1)
         if (shouldIgnoreOtherSubjectSlotConflict(skipSelf, item, cleanSubject)) {
             return false;
         }
@@ -1039,7 +1052,9 @@ function checkDoubleEntryLive(dateVal, yearVal, sectionVal, subjectVal, slotVal,
             alertBoxElem.innerHTML = `
             <div style="font-size: 0.85rem; line-height: 1.4;">
                 <strong style="color: #93c5fd;">✏️ Editing this entry</strong><br>
-                Change rolls, slot, subject, or section as needed. Submit will ask before saving.
+                ${isBulkPastEntry(skipSelf)
+                    ? 'Bulk past class — update absentees and save. Other subjects on Slot 1 are kept separate.'
+                    : 'Change rolls, slot, subject, or section as needed.'}
             </div>`;
         }
         if (submitBtnTextElem) submitBtnTextElem.textContent = 'Save Edited Entry';
@@ -2080,7 +2095,7 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
             !subjectsAreSame(sheetConflict.subject, cleanSubject)) {
             sheetConflict = { exists: false, parallelAudience: true };
         } else if (shouldIgnoreOtherSubjectSlotConflict(editOrig, sheetConflict, cleanSubject)) {
-            // Editing bulk-past row: peer subject on same slot is fine (shortage backfill)
+            // Editing history row: peer subject on same slot is fine (bulk shortage backfill)
             sheetConflict = { exists: false, bulkPastPeer: true };
         } else if (isCombinedVsSpecificSectionConflict(sheetSec, cleanSection)) {
             await showCombinedSectionBlockDialog({
@@ -2111,44 +2126,59 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
         return { status: 'cancelled' };
     }
 
-    const existingEntry = history.find(item => {
+    // Prefer same-subject row (update own paper) over a peer occupying the same slot
+    let existingEntry = history.find(item => {
         if ((item.stream || 'BCA') !== cleanStream) return false;
         if (normalizeHistoryDate(item.date) !== normalizeHistoryDate(cleanDate)) return false;
         if (item.year !== yearVal) return false;
         if (parseInt(item.slot, 10) !== cleanSlot) return false;
-        if (editOrig && isSameAttendanceIdentity(item, editOrig)) return false;
-
         const sec1 = item.section || 'A';
         const sec2 = cleanSection || 'A';
         if (!isSectionOverlap(sec1, sec2, cleanStream)) return false;
-
-        if (allowsParallelSubjects(cleanStream) && item.subject &&
-            !subjectsAreSame(item.subject, cleanSubject)) {
-            return false;
-        }
-
-        if (isParallelCombinedSubjectEntry(sec1, item.subject, sec2, cleanSubject)) {
-            return false;
-        }
-
-        const sameCommonEng = normalizeSectionCode(sec1) === 'COMMON' && normalizeSectionCode(sec2) === 'COMMON';
-        if (sameCommonEng && item.subject && !subjectsAreSame(item.subject, cleanSubject)) {
-            return false;
-        }
-
-        // Bulk-past edit only: other subjects on this slot are allowed
-        if (shouldIgnoreOtherSubjectSlotConflict(editOrig, item, cleanSubject)) {
-            return false;
-        }
-
-        return true;
+        return subjectsAreSame(item.subject, cleanSubject);
     });
 
+    if (!existingEntry) {
+        existingEntry = history.find(item => {
+            if ((item.stream || 'BCA') !== cleanStream) return false;
+            if (normalizeHistoryDate(item.date) !== normalizeHistoryDate(cleanDate)) return false;
+            if (item.year !== yearVal) return false;
+            if (parseInt(item.slot, 10) !== cleanSlot) return false;
+            if (editOrig && isSameAttendanceIdentity(item, editOrig)) return false;
+
+            const sec1 = item.section || 'A';
+            const sec2 = cleanSection || 'A';
+            if (!isSectionOverlap(sec1, sec2, cleanStream)) return false;
+
+            if (allowsParallelSubjects(cleanStream) && item.subject &&
+                !subjectsAreSame(item.subject, cleanSubject)) {
+                return false;
+            }
+
+            if (isParallelCombinedSubjectEntry(sec1, item.subject, sec2, cleanSubject)) {
+                return false;
+            }
+
+            const sameCommonEng = normalizeSectionCode(sec1) === 'COMMON' && normalizeSectionCode(sec2) === 'COMMON';
+            if (sameCommonEng && item.subject && !subjectsAreSame(item.subject, cleanSubject)) {
+                return false;
+            }
+
+            // History edit: other subjects on this slot are allowed
+            if (shouldIgnoreOtherSubjectSlotConflict(editOrig, item, cleanSubject)) {
+                return false;
+            }
+
+            return true;
+        });
+    }
+
     const isEditingMode = !!editOrig;
-    const hasConflict = isEditingMode || !!existingEntry || (sheetConflict.exists && !sheetConflict.offline && !sheetConflict.editingSelf && !sheetConflict.parallelElective && !sheetConflict.parallelAudience && !sheetConflict.bulkPastPeer);
+    const quietEdit = isQuietHistoryEdit(editOrig, editingSelf, existingEntry, sheetConflict);
+    const hasConflict = !quietEdit && (isEditingMode || !!existingEntry || (sheetConflict.exists && !sheetConflict.offline && !sheetConflict.editingSelf && !sheetConflict.parallelElective && !sheetConflict.parallelAudience && !sheetConflict.bulkPastPeer));
     let finalRolls = formattedRolls;
     let finalRollsArr = rollNumbersArray;
-    let conflictChoice = isEditingMode ? 'replace' : 'create';
+    let conflictChoice = (isEditingMode || quietEdit) ? 'replace' : 'create';
 
     if (hasConflict) {
         let prevSubj = cleanSubject;
@@ -2191,8 +2221,8 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
     if (textElem) textElem.style.opacity = '0.5';
     if (spinnerElem) spinnerElem.style.display = 'block';
 
-    const isUpdate = isEditingMode || hasConflict;
-    const prevRollsArr = (sheetConflict.exists && !sheetConflict.offline)
+    const isUpdate = isEditingMode || quietEdit || hasConflict;
+    const prevRollsArr = (sheetConflict.exists && !sheetConflict.offline && !sheetConflict.bulkPastPeer)
         ? normalizeRollNumbers(sheetConflict.rollNumbers)
         : (existingEntry ? normalizeRollNumbers(existingEntry.rollNumbers) : (editOrig ? normalizeRollNumbers(editOrig.rollNumbers) : []));
     const diff = computeRollDiff(prevRollsArr.join(', '), finalRolls);
@@ -3068,6 +3098,11 @@ function fetchTodayServerHistory() {
             // Sheet is source of truth for today's list (cross-device)
             serverEntries.forEach(sEntry => {
                 const k = historyMatchKey(sEntry);
+                const prev = byKey.get(k);
+                if (prev && isBulkPastEntry(prev)) {
+                    sEntry.bulkPast = true;
+                    if (String(prev.timestamp || '') === 'Bulk Past Entry') sEntry.timestamp = prev.timestamp;
+                }
                 byKey.set(k, sEntry);
             });
 
@@ -3138,6 +3173,11 @@ function fetchFullSheetHistory(stream = currentDept || 'BCA') {
             // Sheet is absolute source of truth for this stream
             serverEntries.forEach(sEntry => {
                 const k = historyMatchKey(sEntry);
+                const prev = byKey.get(k);
+                if (prev && isBulkPastEntry(prev)) {
+                    sEntry.bulkPast = true;
+                    if (String(prev.timestamp || '') === 'Bulk Past Entry') sEntry.timestamp = prev.timestamp;
+                }
                 byKey.set(k, sEntry);
             });
 
@@ -5901,7 +5941,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v72_bulk_past_slot_gate';
+    const APP_VER = 'v73_bulk_quiet_edit';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
@@ -7791,6 +7831,11 @@ function fetchAllServerHistory(cb) {
 
             serverEntries.forEach(sEntry => {
                 const k = historyMatchKey(sEntry);
+                const prev = byKey.get(k);
+                if (prev && isBulkPastEntry(prev)) {
+                    sEntry.bulkPast = true;
+                    if (String(prev.timestamp || '') === 'Bulk Past Entry') sEntry.timestamp = prev.timestamp;
+                }
                 byKey.set(k, sEntry);
             });
 
