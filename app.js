@@ -895,20 +895,6 @@ function isBulkPastEntry(entry) {
     return String(entry.timestamp || '') === 'Bulk Past Entry';
 }
 
-/**
- * Gate for shortage backfill / history edit:
- * When EDITING an existing row, a different subject on the same slot is NOT a conflict
- * (multiple bulk NIL subjects share Slot 1). New daily Mark Absentees (no editOrig) stays strict.
- */
-function shouldIgnoreOtherSubjectSlotConflict(editOrig, otherEntry, incomingSubject) {
-    if (!editOrig || !otherEntry) return false;
-    const peerSubj = (otherEntry && typeof otherEntry === 'object') ? otherEntry.subject : otherEntry;
-    const incoming = incomingSubject || editOrig.subject;
-    // Same subject = the row being updated — not a "peer" to ignore
-    if (subjectsAreSame(peerSubj, incoming)) return false;
-    return true;
-}
-
 /** True when saving an edit of the same subject row with no peer/slot fight left. */
 function isQuietHistoryEdit(editOrig, editingSelf, existingEntry, sheetConflict) {
     if (!editOrig || !editingSelf) return false;
@@ -1015,11 +1001,6 @@ function checkDoubleEntryLive(dateVal, yearVal, sectionVal, subjectVal, slotVal,
 
         const sameCommonEng = normalizeSectionCode(sec1) === 'COMMON' && normalizeSectionCode(sec2) === 'COMMON';
         if (sameCommonEng && cleanSubject && itemSubj && !subjectsAreSame(cleanSubject, itemSubj)) {
-            return false;
-        }
-
-        // History edit: other subjects on this slot are allowed (bulk NIL share Slot 1)
-        if (shouldIgnoreOtherSubjectSlotConflict(skipSelf, item, cleanSubject)) {
             return false;
         }
 
@@ -2094,9 +2075,6 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
         } else if (allowsParallelSubjects(cleanStream) && sheetConflict.subject &&
             !subjectsAreSame(sheetConflict.subject, cleanSubject)) {
             sheetConflict = { exists: false, parallelAudience: true };
-        } else if (shouldIgnoreOtherSubjectSlotConflict(editOrig, sheetConflict, cleanSubject)) {
-            // Editing history row: peer subject on same slot is fine (bulk shortage backfill)
-            sheetConflict = { exists: false, bulkPastPeer: true };
         } else if (isCombinedVsSpecificSectionConflict(sheetSec, cleanSection)) {
             await showCombinedSectionBlockDialog({
                 date: cleanDate,
@@ -2161,11 +2139,6 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
 
             const sameCommonEng = normalizeSectionCode(sec1) === 'COMMON' && normalizeSectionCode(sec2) === 'COMMON';
             if (sameCommonEng && item.subject && !subjectsAreSame(item.subject, cleanSubject)) {
-                return false;
-            }
-
-            // History edit: other subjects on this slot are allowed
-            if (shouldIgnoreOtherSubjectSlotConflict(editOrig, item, cleanSubject)) {
                 return false;
             }
 
@@ -3591,6 +3564,53 @@ function closeBulkGeneratorModal() {
     if (modal) modal.classList.remove('active');
 }
 
+/** Bulk only: another paper already occupies this date+section+slot (regular submit unchanged). */
+function collectBulkSlotConflicts(generatedItems) {
+    const history = readAllHistory();
+    const conflicts = [];
+    const seen = {};
+    (generatedItems || []).forEach(item => {
+        const stream = item.stream || currentDept || 'BCA';
+        const date = normalizeHistoryDate(item.date);
+        const slot = parseInt(item.slot, 10) || 1;
+        const occupant = history.find(h => {
+            if (!isStreamMatch(h.stream || stream, stream)) return false;
+            if (normalizeHistoryDate(h.date) !== date) return false;
+            if (!isYearMatching(h.year, item.year)) return false;
+            if ((parseInt(h.slot, 10) || 1) !== slot) return false;
+            if (subjectsAreSame(h.subject, item.subject)) return false;
+            const overlap = isSectionOverlap(h.section || 'A', item.section || 'A', stream);
+            const combLock = isCombinedVsSpecificSectionConflict(h.section, item.section);
+            if (!overlap && !combLock) return false;
+            return true;
+        });
+        if (!occupant) return;
+        const key = date + '|' + String(occupant.subject || '').toLowerCase();
+        if (seen[key]) return;
+        seen[key] = true;
+        conflicts.push({
+            date: date,
+            slot: slot,
+            existingSubject: occupant.subject,
+            existingSection: occupant.section
+        });
+    });
+    return conflicts;
+}
+
+function alertBulkSlotConflicts(conflicts, newSubject, slotVal) {
+    const lines = conflicts.slice(0, 8).map(c =>
+        '• ' + c.date + ' — ' + (c.existingSubject || 'Subject') + ' (' + sectionDisplayLabel(c.existingSection) + ')'
+    );
+    const extra = conflicts.length > 8 ? '\n… and ' + (conflicts.length - 8) + ' more date(s)' : '';
+    alert(
+        'Cannot generate ' + newSubject + ' on Slot ' + slotVal + '.\n\n' +
+        'That slot already has another subject on ' + conflicts.length + ' date(s):\n\n' +
+        lines.join('\n') + extra + '\n\n' +
+        'Choose a different slot. Generating the same subject on this slot is allowed.'
+    );
+}
+
 async function executeBulkPastGenerator() {
     const yearEl = document.getElementById('bulkYearSelect');
     const secEl = document.getElementById('bulkSectionSelect');
@@ -3601,8 +3621,8 @@ async function executeBulkPastGenerator() {
     const yearVal = yearEl ? yearEl.value : '';
     const secVal = secEl ? secEl.value : '';
     const subjVal = subjEl ? subjEl.value : '';
-    // Slot ignored for bulk shortage backfill — always Slot 1 (no cross-staff conflict)
-    const slotVal = '1';
+    const slotEl = document.getElementById('bulkSlotSelect');
+    const slotVal = slotEl ? String(parseInt(slotEl.value, 10) || 1) : '1';
     const startVal = startEl ? startEl.value : '';
     const endVal = endEl ? endEl.value : '';
     const checkedDays = Array.from(document.querySelectorAll('.bulkDayCheck:checked')).map(c => parseInt(c.value, 10));
@@ -3655,7 +3675,7 @@ async function executeBulkPastGenerator() {
                     year: yearVal,
                     section: secVal,
                     subject: subjVal,
-                    slot: '1',
+                    slot: slotVal,
                     rollNumbers: 'NIL',
                     bulkPast: true,
                     offline: false,
@@ -3670,6 +3690,12 @@ async function executeBulkPastGenerator() {
             return;
         }
 
+        const bulkConflicts = collectBulkSlotConflicts(generatedItems);
+        if (bulkConflicts.length > 0) {
+            alertBulkSlotConflicts(bulkConflicts, subjVal, slotVal);
+            return;
+        }
+
         // Save all generated past items locally immediately
         for (const item of generatedItems) {
             saveToLocalHistory(item);
@@ -3677,7 +3703,7 @@ async function executeBulkPastGenerator() {
 
         closeBulkGeneratorModal();
 
-        showCustomToast(`⚡ Created ${generatedItems.length} Past Classes!`, `Added for ${yearVal} Sec ${secVal} (${subjVal}). Edit absentees anytime — no slot fights with other subjects.`);
+        showCustomToast(`⚡ Created ${generatedItems.length} Past Classes!`, `Added for ${yearVal} Sec ${secVal} (${subjVal}) Slot ${slotVal}. You can now edit absentees.`);
         renderHistoryList();
 
         // Perform Google Sheets sync asynchronously in background without freezing UI
@@ -7087,13 +7113,14 @@ function sectionsEqualForSubject(sec1, sec2) {
 
 function isSubjectMatching(subj1, subj2) {
     if (!subj1 || !subj2) return true;
-    if (String(subj2).trim().toUpperCase() === 'ALL') return true;
-    const s1 = String(subj1).trim().toLowerCase();
-    const s2 = String(subj2).trim().toLowerCase();
+    if (String(subj2).trim().toUpperCase() === 'ALL' || String(subj1).trim().toUpperCase() === 'ALL') return true;
+    const s1 = String(subj1).toLowerCase().replace(/\s+/g, ' ').trim();
+    const s2 = String(subj2).toLowerCase().replace(/\s+/g, ' ').trim();
     if (s1 === s2) return true;
-    const base1 = extractSubjNameAndSection(s1).name.trim().toLowerCase();
-    const base2 = extractSubjNameAndSection(s2).name.trim().toLowerCase();
-    return base1 === base2 || s1.includes(base2) || s2.includes(base1);
+    const base1 = extractSubjNameAndSection(s1).name.trim().toLowerCase().replace(/\s+/g, ' ');
+    const base2 = extractSubjNameAndSection(s2).name.trim().toLowerCase().replace(/\s+/g, ' ');
+    // Exact paper only — "DBMS" must not count "DBMS Lab" (all streams).
+    return base1 === base2;
 }
 
 function normalizeRollNumbers(rollInput) {

@@ -28,7 +28,7 @@
   <script>
     // Auto-update after GitHub Pages deploy (runs before app.js) — does not touch attendance data
     (function () {
-      var EXPECTED = 'v32.12-update';
+      var EXPECTED = 'v32.15-bulk-slot-guard';
       var KEY = 'mgm_shell_ver';
       var OWN_CACHE_PREFIX = 'mgm-absentee-informer';
       var reloading = false;
@@ -96,7 +96,7 @@
       // 2) Register SW with versioned URL so GitHub Pages cannot keep old sw.js forever
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          var swUrl = './sw.js?v=v83-sync-badge';
+          var swUrl = './sw.js?v=v86-bulk-slot-guard';
           navigator.serviceWorker.register(swUrl, { updateViaCache: 'none' })
             .then(function (reg) {
               if (navigator.onLine) {
@@ -1012,7 +1012,7 @@
   <datalist id="subjectDatalist"></datalist>
 
   <script src="parser.js?v=v80-sync-badge"></script>
-  <script src="app.js?v=v80-sync-badge"></script>
+  <script src="app.js?v=v32.15-bulk-slot-guard"></script>
 <!-- Bulk Past Class Generator Modal -->
     <div class="modal-overlay" id="bulkGeneratorModal">
       <div class="modal-card" style="max-width: 460px;">
@@ -1027,7 +1027,7 @@
         </div>
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 14px; line-height: 1.4;">
           Auto-generate conducted class entries for past dates. Defaults to <strong>NIL (All Present)</strong> — edit absentees later.
-          Slot is not required here so every staff subject for the same section can be stored for shortage (no slot fights between teachers).
+          Pick a <strong>slot per subject</strong> (e.g. DBMS → Slot 1, C# → Slot 2) so Raw Data keeps one paper per slot.
         </p>
 
         <form id="bulkGeneratorForm" onsubmit="return false;">
@@ -1051,12 +1051,25 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label for="bulkSubjectInput">Subject</label>
-            <select id="bulkSubjectInput" class="form-select" required></select>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="bulkSubjectInput">Subject</label>
+              <select id="bulkSubjectInput" class="form-select" required></select>
+            </div>
+            <div class="form-group">
+              <label for="bulkSlotSelect">Slot / Time</label>
+              <select id="bulkSlotSelect" class="form-select" required>
+                <option value="1">Slot 1 (9:00 - 9:55 AM)</option>
+                <option value="2">Slot 2 (10:00 - 10:55 AM)</option>
+                <option value="3">Slot 3 (11:10 - 12:05 PM)</option>
+                <option value="4">Slot 4 (12:10 - 1:05 PM)</option>
+                <option value="5">Slot 5 (1:05 - 2:00 PM)</option>
+                <option value="6">Slot 6 (2:00 - 2:55 PM)</option>
+                <option value="7">Slot 7 (3:00 - 3:55 PM)</option>
+                <option value="8">Slot 8 (4:00 - 4:55 PM)</option>
+              </select>
+            </div>
           </div>
-          <!-- Slot hidden: bulk shortage backfill auto-uses Slot 1; daily Mark Absentees still enforces slots -->
-          <input type="hidden" id="bulkSlotSelect" value="1" />
 
           <div class="form-row">
             <div class="form-group">
