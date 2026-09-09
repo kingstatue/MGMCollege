@@ -7021,12 +7021,14 @@ function updateShortageSubjectDropdown() {
 
     const yr = yrSelect ? yrSelect.value : 'First Year';
     const sec = secSelect ? secSelect.value : 'A';
-    const subjects = getSubjectsForActiveYear(currentDept, yr, sec);
+    const stream = currentDept || 'BCA';
+    const subjects = getSubjectsForActiveYear(stream, yr, sec);
 
     const history = readAllHistory();
     const historySubjs = new Set();
     history.forEach(item => {
         if (!item.subject) return;
+        if (!isStreamMatch(item.stream, stream)) return;
         if (item.year && item.year.toLowerCase() !== yr.toLowerCase()) return;
         if (item.section && !sectionsEqualForSubject(item.section, sec)) return;
         historySubjs.add(item.subject.trim());
@@ -7364,7 +7366,7 @@ function parseShortageRollNumbers(sRollStr, eRollStr) {
                 const matchingSessions = history.filter(item => {
                     const yrMatch = isYearMatching(item.year, yrVal);
                     const secMatch = !item.section || sectionsEqualForSubject(item.section, secVal);
-                    const streamMatch = !item.stream || isStreamMatch(item.stream, currentDept || 'BCA');
+                    const streamMatch = isStreamMatch(item.stream, currentDept || 'BCA');
                     if (!yrMatch || !secMatch || !streamMatch) return false;
 
                     if (subjFilter !== 'ALL') {

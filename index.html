@@ -28,7 +28,7 @@
   <script>
     // Auto-update after GitHub Pages deploy (runs before app.js) — does not touch attendance data
     (function () {
-      var EXPECTED = 'v32.15-bulk-slot-guard';
+      var EXPECTED = 'v32.16-shortage-stream-subj';
       var KEY = 'mgm_shell_ver';
       var OWN_CACHE_PREFIX = 'mgm-absentee-informer';
       var reloading = false;
@@ -96,7 +96,7 @@
       // 2) Register SW with versioned URL so GitHub Pages cannot keep old sw.js forever
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          var swUrl = './sw.js?v=v86-bulk-slot-guard';
+          var swUrl = './sw.js?v=v87-shortage-stream-subj';
           navigator.serviceWorker.register(swUrl, { updateViaCache: 'none' })
             .then(function (reg) {
               if (navigator.onLine) {
@@ -1012,7 +1012,7 @@
   <datalist id="subjectDatalist"></datalist>
 
   <script src="parser.js?v=v80-sync-badge"></script>
-  <script src="app.js?v=v32.15-bulk-slot-guard"></script>
+  <script src="app.js?v=v32.16-shortage-stream-subj"></script>
 <!-- Bulk Past Class Generator Modal -->
     <div class="modal-overlay" id="bulkGeneratorModal">
       <div class="modal-card" style="max-width: 460px;">
