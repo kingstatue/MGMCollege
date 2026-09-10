@@ -2094,6 +2094,24 @@ body.history-drawer-open #appFrame {
   border-color: #818cf8;
 }
 
+.shortage-export-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+@media (min-width: 640px) {
+  .shortage-export-row {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .shortage-export-row > button {
+    flex: 1;
+    min-width: 160px;
+  }
+}
+
 
 
 

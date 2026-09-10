@@ -7394,14 +7394,20 @@ function parseShortageRollNumbers(sRollStr, eRollStr) {
                 const totalConducted = matchingSessions.length;
                 const absenceCountMap = {};
                 const subjectStatsMap = {}; // { roll: { 'Java': { conducted: 10, missed: 2 } } }
+                const monthHeldMap = {};
+                const monthMissedMap = {};
 
                 rollObjects.forEach(rObj => {
                     absenceCountMap[rObj.code] = 0;
                     subjectStatsMap[rObj.code] = {};
+                    monthMissedMap[rObj.code] = {};
                 });
 
                 matchingSessions.forEach(item => {
                     const itemSubj = (item.subject || 'General').trim();
+                    const itemDateStr = normalizeHistoryDate(item.date) || getTodayISOString();
+                    const monthKey = itemDateStr.substring(0, 7);
+                    monthHeldMap[monthKey] = (monthHeldMap[monthKey] || 0) + 1;
                     const rolls = normalizeRollNumbers(item.rollNumbers);
 
                     rollObjects.forEach(rObj => {
@@ -7433,8 +7439,22 @@ function parseShortageRollNumbers(sRollStr, eRollStr) {
                                 if (subjectStatsMap[rObj.code][itemSubj]) {
                                     subjectStatsMap[rObj.code][itemSubj].missed++;
                                 }
+                                monthMissedMap[rObj.code][monthKey] = (monthMissedMap[rObj.code][monthKey] || 0) + 1;
                             }
                         });
+                    });
+                });
+
+                const monthKeys = Object.keys(monthHeldMap).sort();
+                const monthColumns = [];
+                let runningHeld = 0;
+                monthKeys.forEach(mk => {
+                    runningHeld += monthHeldMap[mk] || 0;
+                    monthColumns.push({
+                        key: mk,
+                        label: formatShortageMonthLabel(mk),
+                        held: monthHeldMap[mk] || 0,
+                        cumHeld: runningHeld
                     });
                 });
 
@@ -7462,6 +7482,15 @@ function parseShortageRollNumbers(sRollStr, eRollStr) {
                         });
                     }
 
+                    const monthAttendedCum = {};
+                    let runningAtt = 0;
+                    monthKeys.forEach(mk => {
+                        const held = monthHeldMap[mk] || 0;
+                        const missM = (monthMissedMap[rObj.code] || {})[mk] || 0;
+                        runningAtt += Math.max(0, held - missM);
+                        monthAttendedCum[mk] = runningAtt;
+                    });
+
                     if (roundedPct < cutoff || cutoff === 100) {
                         shortageList.push({
                             roll: rObj.code,
@@ -7469,13 +7498,14 @@ function parseShortageRollNumbers(sRollStr, eRollStr) {
                             missed: missed,
                             attended: attended,
                             percent: roundedPct,
-                            subjectBreakdown: subjBreakdown
+                            subjectBreakdown: subjBreakdown,
+                            monthAttendedCum: monthAttendedCum
                         });
                     }
                 });
 
                 shortageList.sort((a, b) => a.percent - b.percent);
-                renderShortageResults(container, yrVal, secVal, subjFilter, sRollStr, eRollStr, totalConducted, cutoff, shortageList, periodLabel);
+                renderShortageResults(container, yrVal, secVal, subjFilter, sRollStr, eRollStr, totalConducted, cutoff, shortageList, periodLabel, monthColumns);
 
             } catch (err) {
                 console.error('Error calculating shortage:', err);
@@ -7491,13 +7521,22 @@ function parseShortageRollNumbers(sRollStr, eRollStr) {
     });
 }
 
-function renderShortageResults(container, yearStr, sectionStr, subjectFilter, startRoll, endRoll, totalClasses, cutoff, shortageList, periodLabel) {
+function renderShortageResults(container, yearStr, sectionStr, subjectFilter, startRoll, endRoll, totalClasses, cutoff, shortageList, periodLabel, monthColumns) {
     if (!container) return;
     container.style.display = 'block';
 
     const pLabel = periodLabel || 'All Time (Cumulative)';
     const count = shortageList.length;
     const subjHeader = subjectFilter === 'ALL' ? 'All Subjects (Overall)' : subjectFilter;
+    const sheetMeta = {
+        yearStr: yearStr,
+        sectionStr: sectionStr,
+        subjectFilter: subjectFilter,
+        cutoff: cutoff,
+        periodLabel: pLabel,
+        stream: currentDept || 'BCA',
+        monthColumns: Array.isArray(monthColumns) ? monthColumns : []
+    };
 
     let html = `
     <div style="background: var(--card-bg, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: 10px; padding: 14px; margin-top: 10px;">
@@ -7526,9 +7565,17 @@ function renderShortageResults(container, yearStr, sectionStr, subjectFilter, st
         </div>`;
     } else {
         html += `
-        <button type="button" class="btn-whatsapp-global" id="shortageShareWaBtn" style="margin-bottom: 12px; width: 100%; font-weight: 700;">
-            📱 Share Shortage List (${count} Students) to WhatsApp
-        </button>
+        <div class="shortage-export-row">
+            <button type="button" class="btn-whatsapp-global" id="shortageShareWaBtn" style="margin-bottom: 0; width: 100%; font-weight: 700;">
+                📱 Share Shortage List (${count} Students) to WhatsApp
+            </button>
+            <button type="button" class="btn-secondary shortage-export-btn" id="shortagePrintBtn" style="width: 100%; font-weight: 700; padding: 10px 14px;">
+                🖨️ Print Official Form
+            </button>
+            <button type="button" class="btn-secondary shortage-export-btn" id="shortageExcelBtn" style="width: 100%; font-weight: 700; padding: 10px 14px; background: rgba(16, 185, 129, 0.14); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.35);">
+                📊 Download Excel
+            </button>
+        </div>
         <div style="display: flex; flex-direction: column; gap: 10px; max-height: 400px; overflow-y: auto;">`;
 
         shortageList.forEach(item => {
@@ -7590,6 +7637,19 @@ function renderShortageResults(container, yearStr, sectionStr, subjectFilter, st
             window.open(waUrl, '_blank');
         });
     }
+
+    const printBtn = document.getElementById('shortagePrintBtn');
+    if (printBtn) {
+        printBtn.addEventListener('click', () => {
+            printOfficialShortageSheet(sheetMeta, shortageList);
+        });
+    }
+    const excelBtn = document.getElementById('shortageExcelBtn');
+    if (excelBtn) {
+        excelBtn.addEventListener('click', () => {
+            downloadOfficialShortageExcel(sheetMeta, shortageList);
+        });
+    }
 }
 
 function buildShortageWhatsAppText(yearStr, sectionStr, subjectFilter, startRoll, endRoll, totalClasses, cutoff, shortageList, periodLabel) {
@@ -7619,6 +7679,216 @@ function buildShortageWhatsAppText(yearStr, sectionStr, subjectFilter, startRoll
     }
     return msg;
 }
+
+function formatShortageMonthLabel(ym) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const m = parseInt(String(ym || '').substring(5, 7), 10);
+    return months[m - 1] || '';
+}
+
+function shortageStreamShortLabel(stream) {
+    const s = String(stream || (typeof currentDept !== 'undefined' ? currentDept : '') || 'BCA').toUpperCase();
+    if (s === 'BCM') return 'B.Com';
+    if (s === 'BA') return 'B.A.';
+    if (s === 'BSC') return 'B.Sc.';
+    return 'BCA';
+}
+
+function shortageClassLabel(yearStr, sectionStr, stream) {
+    const roman = { 'First Year': 'I', 'Second Year': 'II', 'Third Year': 'III' };
+    const r = roman[yearStr] || yearStr || '';
+    const streamLabel = shortageStreamShortLabel(stream);
+    let sec = sectionStr || '';
+    if (!sec || sec === 'ALL') {
+        sec = 'Combined';
+    } else if (typeof usesAudienceGroups === 'function' && usesAudienceGroups(stream) && typeof formatAudienceShortLabel === 'function') {
+        sec = formatAudienceShortLabel(sec);
+    }
+    return r + ' ' + streamLabel + ' ' + sec;
+}
+
+function shortageSheetSubjectLabel(subjectFilter) {
+    if (!subjectFilter || subjectFilter === 'ALL') return 'ALL SUBJECTS';
+    return subjectFilter;
+}
+
+function shortageAcademicYearParts() {
+    const iso = typeof getTodayISOString === 'function' ? getTodayISOString() : '';
+    const y = parseInt((iso || '').substring(0, 4), 10) || new Date().getFullYear();
+    const m = parseInt((iso || '').substring(5, 7), 10) || (new Date().getMonth() + 1);
+    const start = m >= 6 ? y : y - 1;
+    return { startYY: String(start).slice(-2), endYY: String(start + 1).slice(-2) };
+}
+
+function padShortageMonthColumns(monthColumns) {
+    const cols = Array.isArray(monthColumns) ? monthColumns.slice() : [];
+    while (cols.length < 8) {
+        cols.push({ key: '', label: '', held: '', cumHeld: '' });
+    }
+    return cols;
+}
+
+function sortShortageByRoll(list) {
+    return (list || []).slice().sort((a, b) => {
+        const na = parseInt(String(a.roll || '').replace(/\D/g, ''), 10);
+        const nb = parseInt(String(b.roll || '').replace(/\D/g, ''), 10);
+        if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+        return String(a.roll || '').localeCompare(String(b.roll || ''));
+    });
+}
+
+function shortageRemarksText(item, cutoff) {
+    if (!item) return '';
+    const limit = (cutoff === 100) ? 75 : cutoff;
+    if (item.percent < limit) return item.percent + '% Shortage';
+    return '';
+}
+
+function buildOfficialAttendanceSheetTable(meta, shortageList) {
+    const cols = padShortageMonthColumns(meta && meta.monthColumns);
+    const students = sortShortageByRoll(shortageList);
+    const ay = shortageAcademicYearParts();
+    const classLabel = escapeHTML(shortageClassLabel(meta.yearStr, meta.sectionStr, meta.stream));
+    const subj = escapeHTML(shortageSheetSubjectLabel(meta.subjectFilter));
+    const cutoff = meta.cutoff;
+    const colCount = cols.length;
+    const footerSpan = colCount;
+
+    let monthHeads = '';
+    let heldCells = '';
+    cols.forEach(col => {
+        monthHeads += `<th style="border:1px solid #000;padding:4px 6px;font-size:12px;font-weight:700;width:56px;">${escapeHTML(col.label || '')}</th>`;
+        const heldVal = col.key ? col.cumHeld : '';
+        heldCells += `<td style="border:1px solid #000;padding:4px 6px;text-align:center;font-size:12px;">${heldVal === '' ? '' : heldVal}</td>`;
+    });
+
+    let studentRows = '';
+    students.forEach(item => {
+        let attCells = '';
+        cols.forEach(col => {
+            let val = '';
+            if (col.key && item.monthAttendedCum && item.monthAttendedCum[col.key] != null) {
+                val = item.monthAttendedCum[col.key];
+            }
+            attCells += `<td style="border:1px solid #000;padding:3px 6px;text-align:center;font-size:12px;">${val}</td>`;
+        });
+        const remarks = escapeHTML(shortageRemarksText(item, cutoff));
+        studentRows += `<tr>
+            <td style="border:1px solid #000;padding:3px 6px;font-size:12px;font-weight:700;">${escapeHTML(item.roll || '')}</td>
+            ${attCells}
+            <td style="border:1px solid #000;padding:3px 6px;font-size:11px;">${remarks}</td>
+        </tr>`;
+    });
+
+    return `
+    <table style="width:100%;border-collapse:collapse;border:1px solid #000;font-family:'Times New Roman',Times,serif;color:#000;background:#fff;">
+        <tr>
+            <td colspan="${colCount + 2}" style="border:1px solid #000;padding:8px 6px 2px;text-align:center;font-size:16px;font-weight:800;letter-spacing:0.3px;">
+                MAHATMA GANDHI MEMORIAL COLLEGE, UDUPI-2
+            </td>
+        </tr>
+        <tr>
+            <td colspan="${colCount + 2}" style="border:1px solid #000;padding:2px 6px 8px;text-align:center;font-size:14px;font-weight:700;">
+                Attendance Records for the year 20${ay.startYY} - 20${ay.endYY}
+            </td>
+        </tr>
+        <tr>
+            <td colspan="${Math.ceil((colCount + 2) / 2)}" style="border:1px solid #000;padding:6px;font-size:13px;font-weight:700;">
+                CLASS: ${classLabel}
+            </td>
+            <td colspan="${Math.floor((colCount + 2) / 2)}" style="border:1px solid #000;padding:6px;font-size:13px;font-weight:700;">
+                SUBJECT: ${subj}
+            </td>
+        </tr>
+        <tr>
+            <td colspan="${colCount + 2}" style="border:1px solid #000;padding:4px 6px;font-size:11px;font-style:italic;">
+                Note: Number of Lectures held &amp; Number of Lectures attended should be prepared in Cumulative Order
+            </td>
+        </tr>
+        <tr>
+            <th style="border:1px solid #000;padding:4px 6px;font-size:12px;text-align:left;">Month</th>
+            ${monthHeads}
+            <th rowspan="2" style="border:1px solid #000;padding:4px 6px;font-size:12px;width:90px;">Remarks</th>
+        </tr>
+        <tr>
+            <th style="border:1px solid #000;padding:4px 6px;font-size:11px;text-align:left;">No. of Lects. held</th>
+            ${heldCells}
+        </tr>
+        <tr>
+            <th style="border:1px solid #000;padding:4px 6px;font-size:12px;">Roll Nos.</th>
+            <th colspan="${colCount}" style="border:1px solid #000;padding:4px 6px;font-size:12px;">Number of Lectures attended</th>
+            <th style="border:1px solid #000;"></th>
+        </tr>
+        ${studentRows}
+        <tr>
+            <td colspan="2" style="border:1px solid #000;padding:18px 6px 6px;font-size:12px;vertical-align:bottom;">Initial of the Faculty</td>
+            <td colspan="${footerSpan}" style="border:1px solid #000;"></td>
+        </tr>
+        <tr>
+            <td colspan="2" style="border:1px solid #000;padding:18px 6px 6px;font-size:12px;vertical-align:bottom;">Name of the HOD</td>
+            <td colspan="${footerSpan}" style="border:1px solid #000;padding:18px 6px 6px;font-size:12px;text-align:right;vertical-align:bottom;">Signature of the HOD</td>
+        </tr>
+    </table>`;
+}
+
+function buildOfficialAttendanceSheetDocument(meta, shortageList) {
+    const table = buildOfficialAttendanceSheetTable(meta, shortageList);
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>MGM Attendance Records</title>
+<style>
+    body { font-family: 'Times New Roman', Times, serif; color: #000; background: #fff; margin: 16px; }
+    .no-print { margin-bottom: 12px; }
+    .no-print button { padding: 8px 14px; font-weight: 700; cursor: pointer; }
+    @media print {
+        .no-print { display: none !important; }
+        body { margin: 8mm; }
+        @page { size: A4 portrait; margin: 10mm; }
+    }
+</style>
+</head>
+<body>
+    <div class="no-print">
+        <button type="button" onclick="window.print()">Print</button>
+    </div>
+    ${table}
+</body>
+</html>`;
+}
+
+function printOfficialShortageSheet(meta, shortageList) {
+    const html = buildOfficialAttendanceSheetDocument(meta, shortageList);
+    const w = window.open('', '_blank');
+    if (!w) {
+        alert('Please allow pop-ups to print the official attendance form.');
+        return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(function () {
+        try { w.print(); } catch (e) {}
+    }, 400);
+}
+
+function downloadOfficialShortageExcel(meta, shortageList) {
+    const table = buildOfficialAttendanceSheetTable(meta, shortageList);
+    const html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"></head><body>' + table + '</body></html>';
+    const blob = new Blob(['\ufeff' + html], { type: 'application/vnd.ms-excel' });
+    const a = document.createElement('a');
+    const classPart = shortageClassLabel(meta.yearStr, meta.sectionStr, meta.stream).replace(/\s+/g, '_');
+    const subjPart = shortageSheetSubjectLabel(meta.subjectFilter).replace(/[^\w]+/g, '_');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'MGM_' + classPart + '_' + subjPart + '_Attendance.xls';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1500);
+}
+
 
 let currentHistoryTabMode = 'TODAY';
 
