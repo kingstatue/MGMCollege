@@ -24,11 +24,11 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
-  <link rel="stylesheet" href="styles.css?v=v32.17-shortage-print">
+  <link rel="stylesheet" href="styles.css?v=v32.18-internal-marks">
   <script>
     // Auto-update after GitHub Pages deploy (runs before app.js) — does not touch attendance data
     (function () {
-      var EXPECTED = 'v32.17-shortage-print';
+      var EXPECTED = 'v32.18-internal-marks';
       var KEY = 'mgm_shell_ver';
       var OWN_CACHE_PREFIX = 'mgm-absentee-informer';
       var reloading = false;
@@ -96,7 +96,7 @@
       // 2) Register SW with versioned URL so GitHub Pages cannot keep old sw.js forever
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          var swUrl = './sw.js?v=v88-shortage-print';
+          var swUrl = './sw.js?v=v89-internal-marks';
           navigator.serviceWorker.register(swUrl, { updateViaCache: 'none' })
             .then(function (reg) {
               if (navigator.onLine) {
@@ -561,6 +561,9 @@
           <button class="mode-tab" id="subTabShortageCalculator" type="button" style="padding: 8px 12px; font-size: 0.82rem; font-weight: 700;">
             ⚠️ Attendance Shortage Report (< 75%)
           </button>
+          <button class="mode-tab" id="subTabInternalMarks" type="button" style="padding: 8px 12px; font-size: 0.82rem; font-weight: 700;">
+            📝 Internal Marks (2 × 10)
+          </button>
         </div>
 
         <!-- CONTAINER 1: DAILY INFORMER -->
@@ -692,6 +695,103 @@
           </div>
 
           <div id="shortageResultsContainer" style="display: none; margin-top: 14px;"></div>
+        </div>
+
+        <div id="hodInternalMarksContainer" style="display: none;">
+          <div class="hod-header-card" style="border: 1px solid rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.06);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+              <h3 style="font-size: 1.05rem; font-weight: 800; color: #34d399; margin: 0;">📝 Internal Marks Entry</h3>
+              <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #6ee7b7; font-size: 0.72rem; font-weight: 700;">2 Tests · Max 10 each</span>
+            </div>
+            <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0 0 12px;">Uses the logged-in stream, year, section and subject. Attendance logging is unchanged.</p>
+
+            <div class="hod-filter-row" style="margin-bottom: 8px;">
+              <div class="form-group" style="flex: 1; min-width: 110px;">
+                <label for="iaYearSelect">Year</label>
+                <select id="iaYearSelect" class="form-select">
+                  <option value="First Year">First Year</option>
+                  <option value="Second Year">Second Year</option>
+                  <option value="Third Year">Third Year</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex: 1; min-width: 110px;">
+                <label for="iaSectionSelect">Section</label>
+                <select id="iaSectionSelect" class="form-select">
+                  <option value="A">Section A</option>
+                  <option value="B">Section B</option>
+                  <option value="C">Section C</option>
+                  <option value="ALL">Combined (Electives)</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex: 1; min-width: 140px;">
+                <label for="iaSubjectSelect">Subject</label>
+                <select id="iaSubjectSelect" class="form-select">
+                  <option value="">Select subject</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex: 1; min-width: 120px;">
+                <label for="iaSemesterSelect">Semester</label>
+                <select id="iaSemesterSelect" class="form-select">
+                  <option value="I">I Semester</option>
+                  <option value="II">II Semester</option>
+                  <option value="III">III Semester</option>
+                  <option value="IV">IV Semester</option>
+                  <option value="V">V Semester</option>
+                  <option value="VI">VI Semester</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="hod-filter-row" style="margin-bottom: 8px;">
+              <div class="form-group" style="flex: 1; min-width: 110px;">
+                <label for="iaStartRoll">Start Roll No. / Ranges</label>
+                <input type="text" id="iaStartRoll" class="form-input" placeholder="e.g. S0001 or S0001-S0060" />
+              </div>
+              <div class="form-group" style="flex: 1; min-width: 110px;">
+                <label for="iaEndRoll">End Roll No. (Optional)</label>
+                <input type="text" id="iaEndRoll" class="form-input" placeholder="e.g. S0060" />
+              </div>
+            </div>
+
+            <button type="button" class="btn-primary" id="iaLoadRollsBtn" style="width: 100%; background: linear-gradient(135deg, #10b981, #059669); border: none; margin-top: 6px; padding: 10px 16px; font-weight: 700;">
+              <span id="iaLoadRollsBtnText">📋 Load Students for Marks Entry</span>
+            </button>
+          </div>
+
+          <div id="iaMarksEntryCard" style="display: none; margin-top: 14px;" class="hod-header-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
+              <h4 style="margin: 0; font-size: 0.95rem; font-weight: 800; color: var(--text-main);" id="iaEntryHeading">Marks grid</h4>
+              <span style="font-size: 0.75rem; color: var(--text-muted);">Names optional · Max 10 · type <strong>AB</strong> if absent</span>
+            </div>
+            <div class="form-group" style="margin-bottom: 10px;">
+              <label for="iaClassListPaste">Paste class list once (from Excel) — Roll, REG.No, Name</label>
+              <textarea id="iaClassListPaste" class="form-input" rows="4" placeholder="Copy from Excel and paste here, e.g.&#10;24301	U05MG24S0020	ABHISHEK&#10;24302	U05MG24S0015	ADHITHYA"></textarea>
+              <button type="button" class="btn-secondary" id="iaApplyClassListBtn" style="margin-top: 8px; width: 100%; font-weight: 700; padding: 8px 12px;">
+                📥 Fill Names from Paste
+              </button>
+              <p style="font-size: 0.72rem; color: var(--text-muted); margin: 6px 0 0;">One-time for this section. Names are reused for every subject.</p>
+            </div>
+            <div style="overflow-x: auto;">
+              <table class="ia-marks-table" id="iaMarksTable">
+                <thead>
+                  <tr>
+                    <th>Roll No.</th>
+                    <th>REG.No.</th>
+                    <th>Name</th>
+                    <th>I TEST (/10)</th>
+                    <th>II TEST (/10)</th>
+                    <th>Internal</th>
+                  </tr>
+                </thead>
+                <tbody id="iaMarksTableBody"></tbody>
+              </table>
+            </div>
+            <div class="shortage-export-row" style="margin-top: 12px; margin-bottom: 0;">
+              <button type="button" class="btn-primary" id="iaSaveMarksBtn" style="width: 100%; font-weight: 700; padding: 10px 14px;">💾 Save Internal Marks</button>
+              <button type="button" class="btn-secondary" id="iaPrintClassBtn" style="width: 100%; font-weight: 700; padding: 10px 14px;">🖨️ Print Marks Form</button>
+              <button type="button" class="btn-secondary" id="iaExcelClassBtn" style="width: 100%; font-weight: 700; padding: 10px 14px; background: rgba(16, 185, 129, 0.14); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.35);">📊 Download Marks Excel</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1012,7 +1112,7 @@
   <datalist id="subjectDatalist"></datalist>
 
   <script src="parser.js?v=v80-sync-badge"></script>
-  <script src="app.js?v=v32.17-shortage-print"></script>
+  <script src="app.js?v=v32.18-internal-marks"></script>
 <!-- Bulk Past Class Generator Modal -->
     <div class="modal-overlay" id="bulkGeneratorModal">
       <div class="modal-card" style="max-width: 460px;">
