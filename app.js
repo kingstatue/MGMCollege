@@ -2190,7 +2190,7 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
         finalRollsArr = userChoice.mergedArr;
     }
 
-    // Now disable button & show spinner during actual HTTP POST transmission
+    // Brief busy state while we save locally and kick off sheet POST in background
     if (btnElem) btnElem.disabled = true;
     if (textElem) textElem.style.opacity = '0.5';
     if (spinnerElem) spinnerElem.style.display = 'block';
@@ -2233,30 +2233,24 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
     // Only skip sheet POST when the browser reports offline. Always POST when online
     // (do not gate on webhook URL heuristics — that blocked the live Apps Script URL).
     const networkOff = (typeof navigator !== 'undefined' && navigator.onLine === false);
+    const targetUrl = getWebhookUrl(currentDept);
+
+    const recordPayload = {
+        ...payload,
+        offline: networkOff,
+        syncNote: networkOff ? 'Pending Sync' : '',
+        bulkPast: !!(editOrig && isBulkPastEntry(editOrig)),
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
 
     try {
-        if (networkOff) {
-            throw new Error('Browser reports offline');
-        }
-
-        const targetUrl = getWebhookUrl(currentDept);
-        await postWithRetry(targetUrl, withAuth(payload), 2);
-
-        const recordPayload = {
-            ...payload,
-            offline: false,
-            syncNote: '',
-            bulkPast: !!(editOrig && isBulkPastEntry(editOrig)),
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-
+        // Local save + toast immediately (Allstreams-style). Sheet POST continues in background.
         saveToLocalHistory(recordPayload);
-        // Never demote peer subjects when saving a bulk-past edit (shortage backfill)
         if (!(editOrig && isBulkPastEntry(editOrig))) {
             demoteReplacedLocalSubjects(payload);
         }
         if (editingMoved && editOrig) {
-            await removeMovedEditOriginal(editOrig);
+            try { await removeMovedEditOriginal(editOrig); } catch (eMove) {}
         }
         editingOriginalEntry = null;
         if (!opts.skipReset) {
@@ -2267,21 +2261,48 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
         if (!opts.silent) {
             showSuccessToast(recordPayload);
         }
-        if (!opts.skipRefresh) {
+        if (networkOff) {
+            updateSyncButtonState();
+            return { status: 'offline' };
+        }
+
+        if (targetUrl) {
+            postWithRetry(targetUrl, withAuth(payload), 2)
+                .then(() => {
+                    if (!opts.skipRefresh && typeof fetchTodayServerHistory === 'function') {
+                        setTimeout(fetchTodayServerHistory, 800);
+                    }
+                })
+                .catch((error) => {
+                    console.warn('Background sheet POST failed; marking Pending Sync:', error);
+                    try {
+                        const pending = Object.assign({}, recordPayload, {
+                            offline: true,
+                            syncNote: 'Pending Sync'
+                        });
+                        saveToLocalHistory(pending);
+                        updateSyncButtonState();
+                        if (typeof renderHistoryList === 'function') renderHistoryList();
+                        if (!opts.silent) {
+                            showSuccessToast(pending);
+                        }
+                    } catch (e2) {}
+                });
+        } else if (!opts.skipRefresh && typeof fetchTodayServerHistory === 'function') {
             setTimeout(fetchTodayServerHistory, 800);
         }
         return { status: 'ok' };
 
     } catch (error) {
         console.warn('Error submitting attendance:', error);
-        const recordPayload = {
+        const offlinePayload = {
             ...payload,
             offline: true,
             syncNote: 'Pending Sync',
             bulkPast: !!(editOrig && isBulkPastEntry(editOrig)),
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
-        saveToLocalHistory(recordPayload);
+        saveToLocalHistory(offlinePayload);
         if (editingMoved && editOrig) {
             try { await removeMovedEditOriginal(editOrig); } catch (e2) {}
         }
@@ -2292,7 +2313,7 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
             renderHistoryList();
         }
         if (!opts.silent) {
-            showSuccessToast(recordPayload);
+            showSuccessToast(offlinePayload);
         }
         updateSyncButtonState();
         return { status: 'offline' };
@@ -2630,25 +2651,48 @@ async function deleteData(dateVal, yearVal, sectionVal, subjectVal, slotVal, str
 
     console.log('Sending Delete Payload:', payload);
 
-    try {
-        const targetUrl = getWebhookUrl(cleanStream);
-        await postWithRetry(targetUrl, withAuth(payload), 2);
-    } catch (e) {
-        console.error('Error sending delete request:', e);
-        alert('Could not reach Google Sheets. Removed from app history on phone — check Raw Data / section sheet manually.');
-    }
-
+    // Remove locally + toast immediately; sheet delete continues in background
     closeConfirmationModal();
     resetAllInputs();
 
+    const networkOff = (typeof navigator !== 'undefined' && navigator.onLine === false);
     const toastTitleElem = document.querySelector('#successToast .toast-text');
     const toastSubtextElem = document.getElementById('toastSubtext');
-    const successToastElem = document.getElementById('successToast');
-    if (toastTitleElem) toastTitleElem.textContent = 'Deleted from Sheets';
-    if (toastSubtextElem) toastSubtextElem.textContent = `Raw Data (${cleanStream}) deleted — section formulas will clear (${cleanDate}, Slot ${cleanSlot})`;
+    const successToastElem = ensureToastOnBody(document.getElementById('successToast'));
+    if (toastTitleElem) {
+        toastTitleElem.textContent = networkOff ? 'Removed on phone (offline)' : 'Deleted from Sheets';
+    }
+    if (toastSubtextElem) {
+        toastSubtextElem.textContent = networkOff
+            ? `Cleared from this phone (${cleanDate}, Slot ${cleanSlot}) — check Raw Data when back online`
+            : `Raw Data (${cleanStream}) deleted — section formulas will clear (${cleanDate}, Slot ${cleanSlot})`;
+    }
     if (successToastElem) {
+        successToastElem.style.display = 'flex';
+        successToastElem.style.opacity = '1';
+        successToastElem.style.visibility = 'visible';
+        successToastElem.style.zIndex = '2147483646';
         successToastElem.classList.add('active');
-        setTimeout(() => successToastElem.classList.remove('active'), 2800);
+        setTimeout(() => {
+            successToastElem.style.opacity = '0';
+            setTimeout(() => {
+                successToastElem.classList.remove('active');
+                successToastElem.style.display = 'none';
+            }, 300);
+        }, 2800);
+    }
+
+    const targetUrl = getWebhookUrl(cleanStream);
+    if (targetUrl && !networkOff) {
+        postWithRetry(targetUrl, withAuth(payload), 2).catch((e) => {
+            console.error('Error sending delete request:', e);
+            if (typeof showCustomToast === 'function') {
+                showCustomToast(
+                    'Removed on phone',
+                    'Could not confirm Google Sheet delete — check Raw Data manually if needed.'
+                );
+            }
+        });
     }
 }
 
@@ -6612,7 +6656,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v80_flex_paste_dates';
+    const APP_VER = 'v81b_offline_toast';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
