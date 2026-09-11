@@ -1954,7 +1954,8 @@ async function removeMovedEditOriginal(orig) {
     } catch (e) {}
 }
 
-async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectVal, slotVal, btnElem, textElem, spinnerElem) {
+async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectVal, slotVal, btnElem, textElem, spinnerElem, opts) {
+    opts = opts || {};
     const cleanDate = dateVal || getTodayISOString();
     let cleanSubject = (subjectVal || '').trim();
     let cleanSection = String(sectionVal || '').trim();
@@ -2258,11 +2259,17 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
             await removeMovedEditOriginal(editOrig);
         }
         editingOriginalEntry = null;
-        closeConfirmationModal();
-        resetAllInputs();
-        renderHistoryList();
-        showSuccessToast(recordPayload);
-        setTimeout(fetchTodayServerHistory, 800);
+        if (!opts.skipReset) {
+            closeConfirmationModal();
+            resetAllInputs();
+            renderHistoryList();
+        }
+        if (!opts.silent) {
+            showSuccessToast(recordPayload);
+        }
+        if (!opts.skipRefresh) {
+            setTimeout(fetchTodayServerHistory, 800);
+        }
         return { status: 'ok' };
 
     } catch (error) {
@@ -2279,10 +2286,14 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
             try { await removeMovedEditOriginal(editOrig); } catch (e2) {}
         }
         editingOriginalEntry = null;
-        closeConfirmationModal();
-        resetAllInputs();
-        renderHistoryList();
-        showSuccessToast(recordPayload);
+        if (!opts.skipReset) {
+            closeConfirmationModal();
+            resetAllInputs();
+            renderHistoryList();
+        }
+        if (!opts.silent) {
+            showSuccessToast(recordPayload);
+        }
         updateSyncButtonState();
         return { status: 'offline' };
     } finally {
@@ -3350,6 +3361,124 @@ function refreshAllSlotDropdowns() {
     } catch (e) {}
 }
 
+function historyYearSortRank(yearVal) {
+    const p = hodYearPrefix(yearVal);
+    if (p === 'I') return 1;
+    if (p === 'II') return 2;
+    if (p === 'III') return 3;
+    return 9;
+}
+
+function historyGroupKey(item) {
+    return historyYearSortRank(item.year) + '|' +
+        hodYearPrefix(item.year) + '|' +
+        normalizeSectionCode(item.section || '');
+}
+
+function historyGroupLabel(item) {
+    const yr = item.year || 'Year';
+    const sec = item.section || 'A';
+    return yr + ' — Sec ' + sec;
+}
+
+function sortHistoryEntriesGrouped(matched) {
+    return matched.sort((a, b) => {
+        const yA = historyYearSortRank(a.year);
+        const yB = historyYearSortRank(b.year);
+        if (yA !== yB) return yA - yB;
+        const sA = normalizeSectionCode(a.section || '');
+        const sB = normalizeSectionCode(b.section || '');
+        if (sA !== sB) return sA.localeCompare(sB);
+        const dA = normalizeHistoryDate(a.date) || '';
+        const dB = normalizeHistoryDate(b.date) || '';
+        if (dA !== dB) return dB.localeCompare(dA);
+        return (parseInt(b.slot, 10) || 1) - (parseInt(a.slot, 10) || 1);
+    });
+}
+
+/** On Today: keep Pending Sync rows first, then year/section groups. */
+function finalizeHistoryDrawerOrder(matched) {
+    const list = Array.isArray(matched) ? matched.slice() : [];
+    if (currentHistoryTabMode !== 'TODAY') {
+        return sortHistoryEntriesGrouped(list);
+    }
+    const pending = list.filter(item => item && item.offline === true);
+    const rest = list.filter(item => !(item && item.offline === true));
+    return sortHistoryEntriesGrouped(pending).concat(sortHistoryEntriesGrouped(rest));
+}
+
+function historySectionsEquivalent(a, b) {
+    const na = normalizeSectionCode(a || '');
+    const nb = normalizeSectionCode(b || '');
+    if (na === nb) return true;
+    // BCA: plain C and C (AIML) are the same attendance section for history filter
+    if ((na === 'C' && nb === 'C_AIML') || (na === 'C_AIML' && nb === 'C')) return true;
+    return false;
+}
+
+/** Section options for history drawer only (does not touch mark-absentees selects). */
+function populateHistorySectionFilter() {
+    const sectionFilter = document.getElementById('allHistorySectionFilter');
+    if (!sectionFilter) return;
+
+    const yearFilter = document.getElementById('allHistoryYearFilter');
+    const selYear = yearFilter ? yearFilter.value : 'ALL';
+    const dept = currentDept || 'BCA';
+    const prev = sectionFilter.value || 'ALL';
+    const yearForOpts = (selYear && selYear !== 'ALL') ? selYear : 'First Year';
+    const isFirstYear = yearForOpts === 'First Year' || yearForOpts === '1' || yearForOpts === '1st Year';
+
+    let options = [{ val: 'ALL', label: 'All Sections' }];
+
+    if (typeof usesAudienceGroups === 'function' && usesAudienceGroups(dept)) {
+        const auds = (typeof getAudienceOptions === 'function') ? getAudienceOptions(dept) : [];
+        auds.forEach(a => options.push({ val: a.val, label: a.label || a.val }));
+        options.push({ val: '__COMBINED__', label: 'Combined only' });
+    } else if (dept === 'BCA') {
+        options = options.concat([
+            { val: 'A', label: 'Section A' },
+            { val: 'B', label: 'Section B' },
+            { val: 'C', label: (isFirstYear && selYear === 'First Year') ? 'Section C (AIML)' : 'Section C' },
+            { val: '__COMBINED__', label: 'Combined only' }
+        ]);
+    } else if (dept === 'BCM' || dept === 'BCOM') {
+        options = options.concat([
+            { val: 'A', label: 'Section A' },
+            { val: 'B', label: 'Section B' },
+            { val: 'C (TP)', label: 'Section C (TP)' },
+            { val: 'C (AF)', label: 'Section C (AF)' },
+            { val: '__COMBINED__', label: 'Combined only' }
+        ]);
+    } else {
+        options = options.concat([
+            { val: 'A', label: 'Section A' },
+            { val: 'B', label: 'Section B' },
+            { val: 'C', label: 'Section C' },
+            { val: '__COMBINED__', label: 'Combined only' }
+        ]);
+    }
+
+    sectionFilter.innerHTML = '';
+    options.forEach(o => {
+        const opt = document.createElement('option');
+        opt.value = o.val;
+        opt.textContent = o.label;
+        sectionFilter.appendChild(opt);
+    });
+
+    const stillValid = Array.from(sectionFilter.options).some(o => o.value === prev);
+    sectionFilter.value = stillValid ? prev : 'ALL';
+}
+
+function historySectionFilterMatches(itemSection, filterVal) {
+    if (!filterVal || filterVal === 'ALL') return true;
+    const itemNorm = normalizeSectionCode(itemSection || '');
+    if (filterVal === '__COMBINED__') {
+        return itemNorm === 'ALL';
+    }
+    return historySectionsEquivalent(itemSection, filterVal);
+}
+
 function renderHistoryList() {
     pruneOldHistory();
     const displayEntries = getActiveDrawerEntries();
@@ -3363,20 +3492,31 @@ function renderHistoryList() {
 
     if (displayEntries.length === 0) {
         const emptyMsg = currentHistoryTabMode === 'ALL'
-            ? 'No attendance history saved yet.'
-            : 'No entries today — submit above.';
+            ? 'No attendance history for this filter.'
+            : 'No entries today for this filter — submit above.';
         historyListEl.innerHTML = '<p class="transcript-placeholder" style="text-align: center; margin-top: 20px;">' + emptyMsg + '</p>';
         return;
     }
 
-    historyListEl.innerHTML = displayEntries.map((item, index) => {
+    let html = '';
+    let lastGroup = null;
+    displayEntries.forEach((item, index) => {
+        const gKey = historyGroupKey(item);
+        if (gKey !== lastGroup) {
+            lastGroup = gKey;
+            const count = displayEntries.filter(x => historyGroupKey(x) === gKey).length;
+            html += '<div class="history-group-header" style="margin: 12px 0 6px; padding: 6px 10px; border-radius: 8px; background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.25); font-size: 0.8rem; font-weight: 700; color: var(--text-primary, #e2e8f0); display: flex; justify-content: space-between; align-items: center;">' +
+                '<span>' + escapeHTML(historyGroupLabel(item)) + '</span>' +
+                '<span style="font-weight: 600; opacity: 0.75; font-size: 0.72rem;">' + count + ' entr' + (count === 1 ? 'y' : 'ies') + '</span>' +
+            '</div>';
+        }
+
         const slotNum = parseInt(item.slot, 10) || 1;
         const slotLabel = SLOT_TIME_LABELS[slotNum] || ('Slot ' + slotNum);
         const rolls = item.rollNumbers === 'NIL'
             ? '<span class="badge badge-nil">NIL (All Present)</span>'
             : (Array.isArray(item.rollNumbers) ? escapeHTML(item.rollNumbers.join(', ')) : escapeHTML(String(item.rollNumbers)));
 
-        const todayStr = getTodayISOString();
         const dateLabel = item.date
             ? ' · ' + escapeHTML(item.date)
             : '';
@@ -3385,12 +3525,11 @@ function renderHistoryList() {
             ? String(item.timestamp)
             : '';
 
-        // Only show status when still waiting to upload — synced entries show submit time instead
         const statusBadge = item.offline
             ? '<span class="badge badge-warning" style="background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid rgba(239,68,68,0.3);">Pending Sync</span>'
             : '<span class="badge badge-success">Synced to Sheet</span>';
 
-        return (
+        html += (
         '<div class="history-card">' +
             '<div class="history-top">' +
                 '<span class="history-title">' + escapeHTML(item.year) + ' Sec ' + escapeHTML(item.section) + dateLabel + '</span>' +
@@ -3410,7 +3549,8 @@ function renderHistoryList() {
             '</div>' +
         '</div>'
         );
-    }).join('');
+    });
+    historyListEl.innerHTML = html;
 
     document.querySelectorAll('.btn-history-edit').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -3740,6 +3880,483 @@ async function executeBulkPastGenerator() {
         if (spinner) spinner.style.display = 'none';
         if (submitBtn) submitBtn.disabled = false;
     }
+}
+
+function paperPasteMaxSlot() {
+    if (typeof SLOT_TIME_LABELS === 'object' && SLOT_TIME_LABELS) {
+        const nums = Object.keys(SLOT_TIME_LABELS).map(Number).filter(n => n > 0);
+        if (nums.length) return Math.max.apply(null, nums);
+    }
+    return 8;
+}
+
+function paperPasteCloneSelect(fromId, toId) {
+    const from = document.getElementById(fromId);
+    const to = document.getElementById(toId);
+    if (!from || !to) return;
+    const prev = to.value;
+    to.innerHTML = from.innerHTML;
+    if (from.value) to.value = from.value;
+    else if (prev && Array.from(to.options).some(o => o.value === prev)) to.value = prev;
+}
+
+function paperPasteDefaultCalendarYear() {
+    try {
+        if (typeof getTodayISOString === 'function') {
+            const y = parseInt(String(getTodayISOString()).slice(0, 4), 10);
+            if (y > 2000) return y;
+        }
+    } catch (e) {}
+    return new Date().getFullYear();
+}
+
+function paperPasteMonthNum(name) {
+    const m = String(name || '').toLowerCase().replace(/\./g, '').slice(0, 3);
+    const map = {
+        jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+        jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12
+    };
+    return map[m] || 0;
+}
+
+function paperPasteIsoFromParts(day, month, year) {
+    let d = parseInt(day, 10);
+    let mo = parseInt(month, 10);
+    let y = parseInt(year, 10);
+    if (!y || isNaN(y)) y = paperPasteDefaultCalendarYear();
+    if (y < 100) y += (y > 50 ? 1900 : 2000);
+    if (!(d >= 1 && d <= 31 && mo >= 1 && mo <= 12)) return '';
+    const dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return '';
+    return y + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+}
+
+/** Flexible dates: 2026-08-01, 1/8/26, 1/8, 1 Aug, 1 Aug 2026, Aug 1 */
+function paperPasteParseDate(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+    let m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);
+    if (m) {
+        let d = m[1];
+        let mo = m[2];
+        let y = m[3];
+        if (parseInt(mo, 10) > 12 && parseInt(d, 10) <= 12) {
+            const tmp = d; d = mo; mo = tmp;
+        }
+        return paperPasteIsoFromParts(d, mo, y);
+    }
+
+    m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})$/);
+    if (m) {
+        let d = m[1];
+        let mo = m[2];
+        if (parseInt(mo, 10) > 12 && parseInt(d, 10) <= 12) {
+            const tmp = d; d = mo; mo = tmp;
+        }
+        return paperPasteIsoFromParts(d, mo, paperPasteDefaultCalendarYear());
+    }
+
+    m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\.?,?\s*(\d{2,4})?$/i);
+    if (m) {
+        const mo = paperPasteMonthNum(m[2]);
+        if (mo) return paperPasteIsoFromParts(m[1], mo, m[3] || paperPasteDefaultCalendarYear());
+    }
+
+    m = s.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s*(\d{2,4})?$/i);
+    if (m) {
+        const mo = paperPasteMonthNum(m[1]);
+        if (mo) return paperPasteIsoFromParts(m[2], mo, m[3] || paperPasteDefaultCalendarYear());
+    }
+
+    return '';
+}
+
+function paperPasteExtractDateToken(line) {
+    const raw = String(line || '');
+    const patterns = [
+        /\b(\d{4}-\d{2}-\d{2})\b/,
+        /\b(\d{1,2}\s+[A-Za-z]{3,9}\.?,?\s*\d{2,4})\b/i,
+        /\b([A-Za-z]{3,9}\.?\s+\d{1,2},?\s*\d{2,4})\b/i,
+        /\b(\d{1,2}\s+[A-Za-z]{3,9}\.?)\b/i,
+        /\b([A-Za-z]{3,9}\.?\s+\d{1,2})\b/i,
+        /\b(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})\b/,
+        /\b(\d{1,2}[\/.\-]\d{1,2})\b/
+    ];
+    for (let i = 0; i < patterns.length; i++) {
+        const m = raw.match(patterns[i]);
+        if (!m) continue;
+        const iso = paperPasteParseDate(m[1]);
+        if (iso) {
+            return { iso: iso, index: m.index, length: m[0].length, raw: m[1] };
+        }
+    }
+    return null;
+}
+
+function paperPasteLineHasDate(line) {
+    return !!paperPasteExtractDateToken(line);
+}
+
+function paperPasteParseDataLine(line, defaultSlot) {
+    const raw = String(line || '').trim();
+    if (!raw) return null;
+
+    if (raw.indexOf('\t') !== -1) {
+        const parts = raw.split('\t').map(p => p.trim()).filter(Boolean);
+        const date = paperPasteParseDate(parts[0]);
+        if (!date) return null;
+        let slot = '';
+        let rollsParts = [];
+        if (parts.length >= 3) {
+            slot = paperPasteParseSlot(parts[1]) || '';
+            rollsParts = parts.slice(slot ? 2 : 1);
+            if (!slot) rollsParts = parts.slice(1);
+        } else if (parts.length === 2) {
+            const maybeSlot = paperPasteParseSlot(parts[1]);
+            if (maybeSlot && /^slot\s*\d+$/i.test(parts[1].replace(/\s+/g, ' ').trim())) {
+                slot = maybeSlot;
+                rollsParts = [];
+            } else if (maybeSlot && parts[1].replace(/\s/g, '').length <= 1) {
+                slot = maybeSlot;
+                rollsParts = [];
+            } else {
+                rollsParts = [parts[1]];
+            }
+        }
+        return {
+            date: date,
+            slot: slot || defaultSlot || '',
+            rolls: rollsParts.join(', ').trim() || 'NIL'
+        };
+    }
+
+    const found = paperPasteExtractDateToken(raw);
+    if (!found) return null;
+    const date = found.iso;
+
+    let rest = (raw.slice(0, found.index) + ' ' + raw.slice(found.index + found.length)).trim();
+    rest = rest.replace(/^[\s,;|\-]+|[\s,;|\-]+$/g, '').trim();
+
+    let slot = '';
+    // Explicit "Slot N" only — otherwise Default Slot (easier book typing)
+    const namedSlot = rest.match(/\bslot\s*(\d+)\b/i);
+    if (namedSlot) {
+        slot = paperPasteParseSlot(namedSlot[0]) || namedSlot[1];
+        rest = (rest.slice(0, namedSlot.index) + ' ' + rest.slice(namedSlot.index + namedSlot[0].length)).trim();
+    }
+
+    let rolls = rest.replace(/^[,;]+/, '').trim();
+    if (!rolls || /^nil$/i.test(rolls) || /^none$/i.test(rolls) || /^all present$/i.test(rolls)) {
+        rolls = 'NIL';
+    }
+
+    return {
+        date: date,
+        slot: slot || defaultSlot || '',
+        rolls: rolls
+    };
+}
+
+function paperPasteParseYear(raw) {
+    const s = String(raw || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!s) return '';
+    if (/^(first|1st|i|fy|year 1|1 year|1)$/.test(s) || s.indexOf('first') !== -1) return 'First Year';
+    if (/^(second|2nd|ii|sy|year 2|2 year|2)$/.test(s) || s.indexOf('second') !== -1) return 'Second Year';
+    if (/^(third|3rd|iii|ty|year 3|3 year|3)$/.test(s) || s.indexOf('third') !== -1) return 'Third Year';
+    return '';
+}
+
+function paperPasteParseSlot(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    const m = s.match(/slot\s*(\d+)/i) || s.match(/^(\d+)$/);
+    if (!m) return '';
+    const n = parseInt(m[1], 10);
+    const max = paperPasteMaxSlot();
+    if (n >= 1 && n <= max) return String(n);
+    return '';
+}
+
+function paperPasteParseSection(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    const u = s.toUpperCase();
+    const sel = document.getElementById('paperPasteSection') || document.getElementById('directSectionSelect');
+    const opts = sel ? Array.from(sel.options).map(o => o.value).filter(Boolean) : [];
+    const exact = opts.find(v => v.toUpperCase() === u);
+    if (exact) return exact;
+    if (u === 'COMBINED' || u === 'ALL SECTIONS' || u === 'ELECTIVE') return opts.indexOf('ALL') !== -1 ? 'ALL' : 'ALL';
+    if (u === 'MAIN' || u === 'COMMON' || u === 'ONLY') return opts.indexOf('ONLY') !== -1 ? 'ONLY' : s;
+    if (/^SEC(TION)?\s*/i.test(s)) {
+        return paperPasteParseSection(s.replace(/^SEC(TION)?\s*/i, ''));
+    }
+    return s;
+}
+
+function paperPasteResolveSubject(raw, year, section) {
+    const t = String(raw || '').trim();
+    if (!t) return '';
+    const stream = currentDept || 'BCA';
+    const list = (typeof getSubjectsForActiveYear === 'function')
+        ? (getSubjectsForActiveYear(stream, year, section) || [])
+        : [];
+    const low = t.toLowerCase();
+    for (let i = 0; i < list.length; i++) {
+        if (String(list[i]).toLowerCase() === low) return list[i];
+    }
+    for (let i = 0; i < list.length; i++) {
+        if (typeof isSubjectMatching === 'function' && isSubjectMatching(list[i], t)) return list[i];
+    }
+    for (let i = 0; i < list.length; i++) {
+        const s = String(list[i]).toLowerCase();
+        if (s.indexOf(low) !== -1 || low.indexOf(s) !== -1) return list[i];
+    }
+    return t;
+}
+
+function paperPasteLooksLikeRolls(s) {
+    const t = String(s || '').trim();
+    if (!t) return true;
+    if (/^nil$/i.test(t) || /^none$/i.test(t) || /^all present$/i.test(t)) return true;
+    if (/year|section|subject|slot/i.test(t) && !/\d/.test(t)) return false;
+    return /^[\dA-Za-z\s,;.\-\/]+$/.test(t) && (/\d/.test(t) || /^nil$/i.test(t));
+}
+
+function paperPasteSplitHeaderParts(line) {
+    const raw = String(line || '').trim();
+    if (!raw) return [];
+    if (raw.indexOf('|') !== -1) return raw.split('|').map(p => p.trim()).filter(Boolean);
+    if (raw.indexOf('\t') !== -1) return raw.split('\t').map(p => p.trim()).filter(Boolean);
+    if (/\s+\/\s+/.test(raw)) return raw.split(/\s+\/\s+/).map(p => p.trim()).filter(Boolean);
+    if (raw.indexOf(',') !== -1) {
+        const parts = raw.split(',').map(p => p.trim()).filter(Boolean);
+        if (parts.length >= 3 && paperPasteParseYear(parts[0])) return parts;
+    }
+    return [];
+}
+
+/** Header line: Year · Section · Subject (no class date). */
+function paperPasteParseBlockHeader(line) {
+    const raw = String(line || '').trim();
+    if (!raw) return null;
+    if (paperPasteParseDate(raw) && /^\d/.test(raw)) return null;
+
+    let parts = paperPasteSplitHeaderParts(raw);
+    if (parts.length >= 3) {
+        const year = paperPasteParseYear(parts[0]) || parts[0];
+        let sectionRaw = parts[1].replace(/^SEC(TION)?\s*/i, '').trim();
+        const section = paperPasteParseSection(sectionRaw) || sectionRaw;
+        const subject = parts.slice(2).join(' ').trim();
+        if (year && section && subject) {
+            return {
+                year: paperPasteParseYear(year) || year,
+                section: section,
+                subject: subject
+            };
+        }
+    }
+
+    const year = paperPasteParseYear(raw);
+    if (!year) return null;
+    let rest = raw.replace(/first\s*year|second\s*year|third\s*year|1st\s*year|2nd\s*year|3rd\s*year|\bI\b|\bII\b|\bIII\b/ig, ' ').trim();
+    rest = rest.replace(/^[\s\-–,|\/]+/, '').trim();
+    const secMatch = rest.match(/^(?:sec(?:tion)?\s*)?([A-Za-z0-9()+\-_\/ ]{1,24}?)(?:\s{2,}|\s+)(.+)$/i);
+    if (!secMatch) return null;
+    const section = paperPasteParseSection(secMatch[1].trim()) || secMatch[1].trim();
+    const subject = String(secMatch[2] || '').trim();
+    if (!section || !subject || paperPasteParseDate(subject)) return null;
+    return { year: year, section: section, subject: subject };
+}
+
+function paperPasteReadDefaultSlot() {
+    const slotEl = document.getElementById('paperPasteSlot');
+    return (slotEl && slotEl.value) || (typeof directSlotSelect !== 'undefined' && directSlotSelect && directSlotSelect.value) || '1';
+}
+
+/**
+ * Header-block paste (flexible dates + default slot):
+ *   First Year | A | DBMS
+ *   1/8  09, 17
+ *   5 Aug  NIL
+ *   12/8/26  Slot 2  03
+ */
+function parsePaperPasteText(text) {
+    const defaultSlot = paperPasteReadDefaultSlot();
+    const lines = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const errors = [];
+    const rows = [];
+    if (!lines.length) return { rows, errors: ['Paste at least one header and one date line.'] };
+
+    let current = null;
+    let blockNo = 0;
+
+    lines.forEach((line, idx) => {
+        const lineNo = idx + 1;
+        const asHeader = !paperPasteLineHasDate(line) ? paperPasteParseBlockHeader(line) : null;
+        if (asHeader) {
+            blockNo++;
+            current = {
+                year: asHeader.year,
+                section: asHeader.section,
+                subject: paperPasteResolveSubject(asHeader.subject, asHeader.year, asHeader.section)
+            };
+            return;
+        }
+
+        const data = paperPasteParseDataLine(line, defaultSlot);
+        if (!data) {
+            errors.push('Line ' + lineNo + ': expected a header (Year | Section | Subject) or a date line (Date Slot rolls).');
+            return;
+        }
+        if (!current) {
+            errors.push('Line ' + lineNo + ': add a Year | Section | Subject header before date lines.');
+            return;
+        }
+
+        const row = {
+            date: data.date,
+            year: current.year,
+            section: current.section,
+            subject: current.subject,
+            slot: data.slot || defaultSlot,
+            rolls: data.rolls || 'NIL',
+            block: blockNo
+        };
+        row.subject = paperPasteResolveSubject(row.subject, row.year, row.section);
+
+        const missing = [];
+        if (!row.date) missing.push('date');
+        if (!row.year) missing.push('year');
+        if (!row.section) missing.push('section');
+        if (!row.subject) missing.push('subject');
+        if (!row.slot) missing.push('slot');
+        if (missing.length) errors.push('Line ' + lineNo + ' missing: ' + missing.join(', '));
+        if (typeof isAttendanceDateAllowed === 'function' && row.date && !isAttendanceDateAllowed(row.date)) {
+            errors.push('Line ' + lineNo + ': future dates are not allowed (' + row.date + ').');
+        }
+        rows.push(row);
+    });
+
+    if (!rows.length && !errors.length) {
+        errors.push('No class lines found. Use a header, then date lines under it.');
+    }
+    return { rows, errors };
+}
+
+function renderPaperPastePreview(parsed) {
+    const box = document.getElementById('paperPastePreview');
+    if (!box) return;
+    if (!parsed.rows.length) {
+        box.style.display = 'block';
+        box.innerHTML = '<div style="color:#f87171;padding:8px;">Nothing to load. Check header blocks (Year | Section | Subject) and date lines.</div>';
+        return;
+    }
+    let html = '';
+    if (parsed.errors.length) {
+        html += '<div style="color:#fbbf24;margin-bottom:6px;">' + parsed.errors.map(e => escapeHTML(e)).join('<br>') + '</div>';
+    }
+    html += '<table class="ia-marks-table" style="font-size:0.74rem;"><thead><tr><th>Date</th><th>Year</th><th>Sec</th><th>Subject</th><th>Slot</th><th>Absentees</th></tr></thead><tbody>';
+    parsed.rows.forEach(r => {
+        html += '<tr><td>' + escapeHTML(r.date) + '</td><td>' + escapeHTML(r.year) + '</td><td>' + escapeHTML(r.section) + '</td><td>' + escapeHTML(r.subject) + '</td><td>' + escapeHTML(r.slot) + '</td><td>' + escapeHTML(r.rolls || 'NIL') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    box.innerHTML = html;
+    box.style.display = 'block';
+}
+
+function openPaperPasteModal() {
+    const modal = document.getElementById('paperPasteModal');
+    if (!modal) return;
+    paperPasteCloneSelect('directSlotSelect', 'paperPasteSlot');
+    modal.classList.add('active');
+}
+
+function closePaperPasteModal() {
+    const modal = document.getElementById('paperPasteModal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function loadPaperPasteToSheet() {
+    const textEl = document.getElementById('paperPasteText');
+    const parsed = parsePaperPasteText(textEl ? textEl.value : '');
+    renderPaperPastePreview(parsed);
+    const ready = parsed.rows.filter(r => r.date && r.year && r.section && r.subject && r.slot);
+    if (!ready.length) {
+        alert('Fix the header blocks and date lines (Date / Year / Section / Subject / Slot), then try again.');
+        return;
+    }
+    if (parsed.errors.length) {
+        const go = confirm(parsed.errors.join('\n') + '\n\nLoad the complete rows anyway?');
+        if (!go) return;
+    }
+
+    const loadBtn = document.getElementById('paperPasteLoadBtn');
+    const loadText = document.getElementById('paperPasteLoadBtnText');
+    const spinner = document.getElementById('paperPasteLoadSpinner');
+    if (loadBtn) loadBtn.disabled = true;
+    if (loadText) loadText.textContent = 'Loading…';
+    if (spinner) spinner.style.display = 'block';
+
+    let ok = 0, offline = 0, cancelled = 0, failed = 0;
+    const submitOpts = { skipReset: true, silent: true, skipRefresh: true };
+    for (let i = 0; i < ready.length; i++) {
+        const row = ready[i];
+        try {
+            const result = await submitData(row.date, row.rolls, row.year, row.section, row.subject, row.slot, null, null, null, submitOpts);
+            if (result && result.status === 'ok') ok++;
+            else if (result && result.status === 'offline') offline++;
+            else cancelled++;
+        } catch (e) {
+            failed++;
+        }
+    }
+
+    if (loadBtn) loadBtn.disabled = false;
+    if (loadText) loadText.textContent = 'Load to Sheet';
+    if (spinner) spinner.style.display = 'none';
+
+    if (typeof fetchTodayServerHistory === 'function') {
+        setTimeout(fetchTodayServerHistory, 800);
+    }
+    if (typeof renderHistoryList === 'function') {
+        try { renderHistoryList(); } catch (e) {}
+    }
+
+    const bits = [];
+    if (ok) bits.push(ok + ' saved');
+    if (offline) bits.push(offline + ' offline');
+    if (cancelled) bits.push(cancelled + ' skipped');
+    if (failed) bits.push(failed + ' failed');
+    if (typeof showCustomToast === 'function') {
+        showCustomToast('Paste load finished', bits.join(' · ') || 'No rows loaded');
+    } else {
+        alert('Paste load finished: ' + (bits.join(', ') || 'No rows loaded'));
+    }
+    if (ok + offline > 0) closePaperPasteModal();
+}
+
+function initPaperPasteLoader() {
+    const openBtn = document.getElementById('openPaperPasteModalBtn');
+    const closeBtn = document.getElementById('closePaperPasteModalBtn');
+    const modal = document.getElementById('paperPasteModal');
+    const previewBtn = document.getElementById('paperPastePreviewBtn');
+    const loadBtn = document.getElementById('paperPasteLoadBtn');
+    if (openBtn) openBtn.addEventListener('click', openPaperPasteModal);
+    if (closeBtn) closeBtn.addEventListener('click', closePaperPasteModal);
+    if (modal) {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closePaperPasteModal();
+        });
+    }
+    if (previewBtn) {
+        previewBtn.addEventListener('click', () => {
+            const textEl = document.getElementById('paperPasteText');
+            renderPaperPastePreview(parsePaperPasteText(textEl ? textEl.value : ''));
+        });
+    }
+    if (loadBtn) loadBtn.addEventListener('click', loadPaperPasteToSheet);
 }
 
 function updateStatus(msg, type) {
@@ -4118,6 +4735,7 @@ function applyDepartment(deptCode) {
 
     // Render Stream Presets & update today count badge (stream-filtered)
     renderStreamPresets(config);
+    try { populateHistorySectionFilter(); } catch (e) {}
     renderHistoryList();
     fetchCloudSubjects();
     // Pull today's sheet entries so history matches other devices
@@ -5427,6 +6045,7 @@ document.addEventListener('DOMContentLoaded', () => {
             executeBulkPastGenerator();
         });
     }
+    initPaperPasteLoader();
 
     // Year / section changes: filter locally only (cloud poll already runs every 12s).
     // Avoid fetchCloudSubjects here — it rebuilt dropdowns mid-interaction and caused screen flash.
@@ -5993,7 +6612,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v76_sync_badge';
+    const APP_VER = 'v80_flex_paste_dates';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
@@ -7899,8 +8518,8 @@ function downloadOfficialShortageExcel(meta, shortageList) {
 
 
 // ==========================================
-// INTERNAL MARKS (2 tests, max 10) — Print / Excel only
-// Attendance / shortage above is unchanged. No academic-performance report.
+// INTERNAL MARKS (2 tests, max 10) + ACADEMIC PERFORMANCE FINAL REPORT
+// Attendance / shortage above is unchanged. Works for logged-in stream (BCA/BCM/BA/BSC).
 // ==========================================
 
 const IA_MAX_MARKS = 10;
@@ -8086,8 +8705,58 @@ function updateIaSubjectDropdown() {
     if (prev && allSubjs.indexOf(prev) !== -1) subjSelect.value = prev;
 }
 
+function monthBelongsToSemester(ym, sem) {
+    const mo = parseInt(String(ym || '').substring(5, 7), 10);
+    if (!mo) return false;
+    const odd = (sem === 'I' || sem === 'III' || sem === 'V');
+    if (odd) return mo >= 6 && mo <= 11;
+    return mo === 12 || mo <= 5;
+}
+
+function iaSubjectKeyPart(subject) {
+    return String(subject || '').trim().toLowerCase();
+}
+
+function iaSubjectsLooselyEqual(a, b) {
+    const s1 = iaSubjectKeyPart(a);
+    const s2 = iaSubjectKeyPart(b);
+    if (!s1 || !s2) return false;
+    if (s1 === s2) return true;
+    if (typeof extractSubjNameAndSection === 'function') {
+        const b1 = extractSubjNameAndSection(a).name.trim().toLowerCase();
+        const b2 = extractSubjNameAndSection(b).name.trim().toLowerCase();
+        if (b1 && b2 && b1 === b2) return true;
+    }
+    return false;
+}
+
 function getIaMark(yearStr, sectionStr, subject, roll) {
-    return readInternalMarksStore()[iaRecordKey(yearStr, sectionStr, subject, roll)] || { ia1: '', ia2: '' };
+    const store = readInternalMarksStore();
+    const exact = store[iaRecordKey(yearStr, sectionStr, subject, roll)];
+    if (exact) return exact;
+    // Combined / elective marks are often saved under ALL — still show on section report
+    if (sectionStr && sectionStr !== 'ALL') {
+        const allSec = store[iaRecordKey(yearStr, 'ALL', subject, roll)];
+        if (allSec) return allSec;
+    }
+    const stream = iaCurrentStream();
+    const rollU = String(roll || '').trim().toUpperCase();
+    const year = yearStr || '';
+    let found = null;
+    Object.keys(store).forEach(function (k) {
+        if (found) return;
+        const parts = k.split('|');
+        if (parts.length < 5) return;
+        if (parts[0] !== stream || parts[1] !== year || parts[4] !== rollU) return;
+        const keySec = parts[2] || '';
+        const keySub = parts[3] || '';
+        const secOk = keySec === (sectionStr || '') ||
+            keySec === 'ALL' ||
+            (typeof sectionsEqualForSubject === 'function' && sectionsEqualForSubject(keySec, sectionStr));
+        if (!secOk) return;
+        if (iaSubjectsLooselyEqual(keySub, subject)) found = store[k];
+    });
+    return found || { ia1: '', ia2: '' };
 }
 
 function upsertIaMark(yearStr, sectionStr, subject, roll, ia1, ia2, name, regNo) {
@@ -8349,6 +9018,319 @@ function buildOfficialIaMarksTable(yearStr, sectionStr, subject, rollObjects, se
         rows + '</table></div>';
 }
 
+function iaAbsenteeMatchesRoll(absentStr, rObj) {
+    const cleanR = String(absentStr).trim().toUpperCase();
+    const rNum = parseInt(cleanR.replace(/\D/g, ''), 10);
+    if (cleanR === rObj.code) return true;
+    if (!isNaN(rNum) && rNum === rObj.num) return true;
+    if (!isNaN(rNum) && rNum > 0) {
+        const str1 = String(rNum);
+        const str2 = String(rObj.num);
+        if (str1.length >= 2 && str2.length >= 2) {
+            return str1.endsWith(str2) || str2.endsWith(str1);
+        }
+    }
+    return false;
+}
+
+function collectIaSubjectAttendance(yearStr, sectionStr, rollObj) {
+    const stream = iaCurrentStream();
+    const history = readAllHistory();
+    const bySubj = {};
+    history.forEach(item => {
+        if (item.stream && !isStreamMatch(item.stream, stream)) return;
+        if (!isYearMatching(item.year, yearStr)) return;
+        if (item.section && typeof sectionsEqualForSubject === 'function' && !sectionsEqualForSubject(item.section, sectionStr)) return;
+        const subj = String(item.subject || '').trim();
+        if (!subj) return;
+        const dateStr = (typeof normalizeHistoryDate === 'function' ? normalizeHistoryDate(item.date) : item.date) || (typeof getTodayISOString === 'function' ? getTodayISOString() : '');
+        const mk = String(dateStr || '').substring(0, 7);
+        if (!bySubj[subj]) bySubj[subj] = { months: {}, held: 0, missed: 0 };
+        bySubj[subj].held++;
+        if (!bySubj[subj].months[mk]) bySubj[subj].months[mk] = { held: 0, missed: 0 };
+        bySubj[subj].months[mk].held++;
+        const rolls = normalizeRollNumbers(item.rollNumbers);
+        const missed = rolls.some(r => iaAbsenteeMatchesRoll(r, rollObj));
+        if (missed) {
+            bySubj[subj].missed++;
+            bySubj[subj].months[mk].missed++;
+        }
+    });
+    return bySubj;
+}
+
+/** Lab / practical paper (final report order only). */
+function isIaLabSubject(subj) {
+    return /\b(lab|practical)\b/i.test(String(subj || ''));
+}
+
+/** Core English (not Optional English). */
+function isIaEnglishCoreSubject(subj) {
+    const s = String(subj || '').trim().toLowerCase();
+    if (!s) return false;
+    if (/\boptional\s*english\b/i.test(s)) return false;
+    return /\benglish\b/i.test(s);
+}
+
+/** Parallel Combined language electives (Kannada / Hindi / Sanskrit). */
+function isIaLanguageElectiveSubject(subj) {
+    return /\b(kannada|kanada|kanad|hindi|hindhi|sanskrit|sanskrith|sanskritha|sanskrut|sanskrutha|sanskritam)\b/i.test(String(subj || ''));
+}
+
+/**
+ * Final Academic Performance subject order only (does not change attendance / marks entry).
+ * 1st & 2nd Year: language elective → English → other theory → labs
+ * 3rd Year: theory subjects → labs
+ */
+function iaFinalReportSubjectRank(subj, yearStr) {
+    const lab = isIaLabSubject(subj);
+    if (yearStr === 'Third Year') {
+        return lab ? 2 : 1;
+    }
+    if (isIaLanguageElectiveSubject(subj)) return 1;
+    if (isIaEnglishCoreSubject(subj)) return 2;
+    if (lab) return 4;
+    return 3;
+}
+
+function sortIaFinalReportSubjects(subjects, yearStr) {
+    return (subjects || []).slice().sort(function (a, b) {
+        const ra = iaFinalReportSubjectRank(a, yearStr);
+        const rb = iaFinalReportSubjectRank(b, yearStr);
+        if (ra !== rb) return ra - rb;
+        return String(a).localeCompare(String(b));
+    });
+}
+
+function listIaReportSubjects(yearStr, sectionStr) {
+    const stream = iaCurrentStream();
+    const fromConfig = getSubjectsForActiveYear(stream, yearStr, sectionStr) || [];
+    const store = readInternalMarksStore();
+    const fromMarks = [];
+    Object.keys(store).forEach(k => {
+        const parts = k.split('|');
+        if (parts.length < 5 || parts[0] !== stream || parts[1] !== yearStr) return;
+        const keySec = parts[2] || '';
+        const secOk = keySec === (sectionStr || '') ||
+            keySec === 'ALL' ||
+            (typeof sectionsEqualForSubject === 'function' && sectionsEqualForSubject(keySec, sectionStr));
+        if (!secOk) return;
+        const subj = parts[3];
+        if (subj) fromMarks.push(subj);
+    });
+    const history = readAllHistory();
+    const fromHist = [];
+    history.forEach(item => {
+        if (!item.subject) return;
+        if (item.stream && !isStreamMatch(item.stream, stream)) return;
+        if (!isYearMatching(item.year, yearStr)) return;
+        if (item.section && typeof sectionsEqualForSubject === 'function' && !sectionsEqualForSubject(item.section, sectionStr)) return;
+        fromHist.push(item.subject.trim());
+    });
+    const seen = new Set();
+    const out = [];
+    [].concat(fromConfig, fromMarks, fromHist).forEach(s => {
+        const name = String(s || '').trim();
+        if (!name) return;
+        const low = name.toLowerCase();
+        if (seen.has(low)) return;
+        let display = name;
+        if (fromMarks.indexOf(name) !== -1 && name === low) {
+            const nicer = [].concat(fromConfig, fromHist).find(function (x) {
+                return String(x || '').trim().toLowerCase() === low;
+            });
+            if (nicer) display = String(nicer).trim();
+        }
+        seen.add(low);
+        out.push(display);
+    });
+    return sortIaFinalReportSubjects(out, yearStr);
+}
+
+function buildAcademicPerformanceExcelTable(yearStr, sectionStr, semester, rollObj, subjects) {
+    const attMap = collectIaSubjectAttendance(yearStr, sectionStr, rollObj);
+    const monthSet = {};
+    Object.keys(attMap).forEach(function (subj) {
+        Object.keys(attMap[subj].months || {}).forEach(function (mk) {
+            if (monthBelongsToSemester(mk, semester)) monthSet[mk] = true;
+        });
+    });
+    let monthKeys = Object.keys(monthSet).sort();
+    if (monthKeys.length === 0) {
+        Object.keys(attMap).forEach(function (subj) {
+            Object.keys(attMap[subj].months || {}).forEach(function (mk) { monthSet[mk] = true; });
+        });
+        monthKeys = Object.keys(monthSet).sort();
+    }
+    if (monthKeys.length > 4) monthKeys = monthKeys.slice(-4);
+    while (monthKeys.length < 4) monthKeys.push('');
+
+    const td = 'border:1px solid #000;padding:4px 6px;font-size:12px;';
+    const th = td + 'font-weight:700;background:#eee;';
+    let headMonths = '';
+    monthKeys.forEach(function (mk) {
+        const lab = mk ? formatShortageMonthLabel(mk) : '';
+        headMonths += '<th style="' + th + '">' + escapeHTML(lab) + ' Held</th><th style="' + th + '">' + escapeHTML(lab) + ' Att</th>';
+    });
+
+    let bodyRows = '';
+    const rowSubjects = subjects.slice();
+    while (rowSubjects.length < 12) rowSubjects.push('');
+    rowSubjects.forEach(function (subj) {
+        let ia1 = '', ia2 = '';
+        if (subj) {
+            const rec = getIaMark(yearStr, sectionStr, subj, rollObj.code);
+            ia1 = clampIaMark(rec.ia1);
+            ia2 = clampIaMark(rec.ia2);
+        }
+        let attCells = '';
+        monthKeys.forEach(function (mk) {
+            let held = '', att = '';
+            if (subj && mk && attMap[subj] && attMap[subj].months[mk]) {
+                held = attMap[subj].months[mk].held;
+                att = Math.max(0, held - (attMap[subj].months[mk].missed || 0));
+            } else if (subj && mk) {
+                Object.keys(attMap).forEach(function (attSubj) {
+                    if (!iaSubjectsLooselyEqual(attSubj, subj)) return;
+                    if (!attMap[attSubj].months[mk]) return;
+                    held = attMap[attSubj].months[mk].held;
+                    att = Math.max(0, held - (attMap[attSubj].months[mk].missed || 0));
+                });
+            }
+            attCells += '<td style="' + td + 'text-align:center;">' + held + '</td><td style="' + td + 'text-align:center;">' + att + '</td>';
+        });
+        bodyRows += '<tr>' +
+            '<td style="' + td + 'text-align:left;">' + escapeHTML(subj) + '</td>' +
+            '<td style="' + td + 'text-align:center;font-weight:700;">' + escapeHTML(String(ia1)) + '</td>' +
+            '<td style="' + td + 'text-align:center;font-weight:700;">' + escapeHTML(String(ia2)) + '</td>' +
+            attCells + '</tr>';
+    });
+
+    const roster = getStudentRosterEntry(yearStr, sectionStr, rollObj.code);
+    const classLabel = escapeHTML(shortageClassLabel(yearStr, sectionStr, iaCurrentStream()));
+    const nameBit = roster.name ? (' | Name: ' + escapeHTML(roster.name)) : '';
+    const regBit = roster.regNo ? (' | REG.No: ' + escapeHTML(roster.regNo)) : '';
+    const colCount = 3 + (monthKeys.length * 2);
+
+    return '<table style="width:100%;border-collapse:collapse;border:1px solid #000;margin-bottom:22px;font-family:Times New Roman,Times,serif;">' +
+        '<tr><td colspan="' + colCount + '" style="' + td + 'font-weight:800;text-align:center;">MAHATMA GANDHI MEMORIAL COLLEGE, UDUPI-2</td></tr>' +
+        '<tr><td colspan="' + colCount + '" style="' + td + 'font-weight:800;text-align:center;">' + escapeHTML(semester) + ' Semester — Academic Performance</td></tr>' +
+        '<tr><td colspan="' + colCount + '" style="' + td + '">CLASS: ' + classLabel + ' | ROLL: ' + escapeHTML(rollObj.code) + nameBit + regBit + '</td></tr>' +
+        '<tr><th style="' + th + '">Subject</th><th style="' + th + '">Test I (/10)</th><th style="' + th + '">Test II (/10)</th>' + headMonths + '</tr>' +
+        bodyRows +
+        '</table>';
+}
+
+function buildAcademicPerformanceExcelHtml(yearStr, sectionStr, semester, rollObjects) {
+    const subjects = listIaReportSubjects(yearStr, sectionStr);
+    let html = '';
+    rollObjects.forEach(function (rObj) {
+        html += buildAcademicPerformanceExcelTable(yearStr, sectionStr, semester, rObj, subjects);
+    });
+    return html;
+}
+
+function buildAcademicPerformancePage(yearStr, sectionStr, semester, rollObj, subjects) {
+    const attMap = collectIaSubjectAttendance(yearStr, sectionStr, rollObj);
+    const monthSet = {};
+    Object.keys(attMap).forEach(function (subj) {
+        Object.keys(attMap[subj].months || {}).forEach(function (mk) {
+            if (monthBelongsToSemester(mk, semester)) monthSet[mk] = true;
+        });
+    });
+    let monthKeys = Object.keys(monthSet).sort();
+    if (monthKeys.length === 0) {
+        Object.keys(attMap).forEach(function (subj) {
+            Object.keys(attMap[subj].months || {}).forEach(function (mk) { monthSet[mk] = true; });
+        });
+        monthKeys = Object.keys(monthSet).sort();
+    }
+    if (monthKeys.length > 4) monthKeys = monthKeys.slice(-4);
+    while (monthKeys.length < 4) monthKeys.push('');
+
+    let monthHead = '';
+    let pairHead = '';
+    monthKeys.forEach(function (mk) {
+        const lab = mk ? formatShortageMonthLabel(mk) : '';
+        monthHead += '<th colspan="2" style="border:1px solid #000;padding:3px 4px;font-size:11px;">' + escapeHTML(lab) + '</th>';
+        pairHead += '<th style="border:1px solid #000;padding:2px 4px;font-size:10px;width:28px;">1</th><th style="border:1px solid #000;padding:2px 4px;font-size:10px;width:28px;">2</th>';
+    });
+
+    let bodyRows = '';
+    const rowSubjects = subjects.slice();
+    while (rowSubjects.length < 12) rowSubjects.push('');
+    rowSubjects.forEach(function (subj) {
+        let ia1 = '', ia2 = '';
+        if (subj) {
+            const rec = getIaMark(yearStr, sectionStr, subj, rollObj.code);
+            ia1 = clampIaMark(rec.ia1);
+            ia2 = clampIaMark(rec.ia2);
+        }
+        let attCells = '';
+        monthKeys.forEach(function (mk) {
+            let held = '', att = '';
+            if (subj && mk && attMap[subj] && attMap[subj].months[mk]) {
+                held = attMap[subj].months[mk].held;
+                att = Math.max(0, held - (attMap[subj].months[mk].missed || 0));
+            } else if (subj && mk) {
+                Object.keys(attMap).forEach(function (attSubj) {
+                    if (!iaSubjectsLooselyEqual(attSubj, subj)) return;
+                    if (!attMap[attSubj].months[mk]) return;
+                    held = attMap[attSubj].months[mk].held;
+                    att = Math.max(0, held - (attMap[attSubj].months[mk].missed || 0));
+                });
+            }
+            attCells += '<td style="border:1px solid #000;padding:3px 4px;text-align:center;font-size:11px;">' + held + '</td>' +
+                '<td style="border:1px solid #000;padding:3px 4px;text-align:center;font-size:11px;">' + att + '</td>';
+        });
+        bodyRows += '<tr><td style="border:1px solid #000;padding:3px 6px;font-size:12px;">' + escapeHTML(subj) + '</td>' +
+            '<td style="border:1px solid #000;padding:3px 4px;text-align:center;font-size:12px;">' + escapeHTML(String(ia1)) + '</td>' +
+            '<td style="border:1px solid #000;padding:3px 4px;text-align:center;font-size:12px;">' + escapeHTML(String(ia2)) + '</td>' +
+            attCells + '</tr>';
+    });
+
+    const roster = getStudentRosterEntry(yearStr, sectionStr, rollObj.code);
+    const classLabel = escapeHTML(shortageClassLabel(yearStr, sectionStr, iaCurrentStream()));
+    const nameLine = roster.name ? (' &nbsp; <strong>NAME:</strong> ' + escapeHTML(roster.name)) : '';
+    const regLine = roster.regNo ? (' &nbsp; <strong>REG.No:</strong> ' + escapeHTML(roster.regNo)) : '';
+    return '<div class="ap-page" style="page-break-after:always;margin-bottom:18px;">' +
+        '<div style="text-align:center;font-weight:800;font-size:15px;margin-bottom:2px;">MAHATMA GANDHI MEMORIAL COLLEGE, UDUPI-2</div>' +
+        '<div style="text-align:center;font-weight:800;font-size:16px;">' + escapeHTML(semester) + ' Semester</div>' +
+        '<div style="text-align:center;font-weight:700;font-size:15px;margin-bottom:8px;">Academic Performance</div>' +
+        '<div style="font-size:13px;margin-bottom:8px;"><strong>CLASS:</strong> ' + classLabel +
+        ' &nbsp; <strong>ROLL:</strong> ' + escapeHTML(rollObj.code) + nameLine + regLine + '</div>' +
+        '<table style="width:100%;border-collapse:collapse;border:1px solid #000;font-family:Times New Roman,Times,serif;">' +
+        '<tr><th rowspan="3" style="border:1px solid #000;padding:4px;font-size:12px;width:28%;">Subject</th>' +
+        '<th colspan="2" style="border:1px solid #000;padding:4px;font-size:12px;">Test / Assignment</th>' +
+        '<th colspan="8" style="border:1px solid #000;padding:4px;font-size:12px;">Attendance *</th></tr>' +
+        '<tr><th colspan="2" style="border:1px solid #000;padding:3px;font-size:11px;"></th>' + monthHead + '</tr>' +
+        '<tr><th style="border:1px solid #000;padding:3px;font-size:11px;">I</th><th style="border:1px solid #000;padding:3px;font-size:11px;">II</th>' + pairHead + '</tr>' +
+        bodyRows +
+        '<tr><td style="border:1px solid #000;padding:14px 6px 6px;font-size:12px;">Signature of the Parent</td><td style="border:1px solid #000;"></td><td style="border:1px solid #000;"></td><td colspan="8" style="border:1px solid #000;"></td></tr>' +
+        '<tr><td style="border:1px solid #000;padding:14px 6px 6px;font-size:12px;">Signature of the Academic Advisor</td><td colspan="10" style="border:1px solid #000;"></td></tr>' +
+        '</table>' +
+        '<div style="font-size:11px;margin-top:6px;font-style:italic;">* 1. Maximum Classes held &nbsp;&nbsp; 2. Number of Classes attended &nbsp;&nbsp; Tests: Max 10 each</div>' +
+        '</div>';
+}
+
+function buildAcademicPerformancePagesHtml(yearStr, sectionStr, semester, rollObjects) {
+    const subjects = listIaReportSubjects(yearStr, sectionStr);
+    let pages = '';
+    rollObjects.forEach(function (rObj) {
+        pages += buildAcademicPerformancePage(yearStr, sectionStr, semester, rObj, subjects);
+    });
+    return pages;
+}
+
+function printAcademicPerformanceReport(yearStr, sectionStr, semester, rollObjects) {
+    const pages = buildAcademicPerformancePagesHtml(yearStr, sectionStr, semester, rollObjects);
+    const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Academic Performance</title>' +
+        '<style>body{font-family:Times New Roman,Times,serif;color:#000;background:#fff;margin:12px;} .no-print{margin-bottom:12px;} @media print{.no-print{display:none!important;} .ap-page{page-break-after:always;} @page{size:A4 portrait;margin:10mm;}}</style></head><body>' +
+        '<div class="no-print"><button type="button" onclick="window.print()">Print</button></div>' +
+        pages + '</body></html>';
+    printHtmlInNewWindow(html);
+}
+
 function printHtmlInNewWindow(html) {
     const w = window.open('', '_blank');
     if (!w) { alert('Please allow pop-ups to print.'); return; }
@@ -8360,15 +9342,30 @@ function printHtmlInNewWindow(html) {
 }
 
 function downloadHtmlAsExcel(innerHtml, filename) {
-    const html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"></head><body>' + innerHtml + '</body></html>';
+    const html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Report</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body>' + innerHtml + '</body></html>';
     const blob = new Blob(['\ufeff' + html], { type: 'application/vnd.ms-excel' });
+    const fname = filename || 'MGM_Internal_Marks.xls';
+    if (window.navigator && typeof window.navigator.msSaveOrOpenBlob === 'function') {
+        window.navigator.msSaveOrOpenBlob(blob, fname);
+        return;
+    }
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename || 'MGM_Internal_Marks.xls';
+    a.download = fname;
+    a.rel = 'noopener';
     document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1500);
+    const reader = new FileReader();
+    reader.onload = function () {
+        a.href = reader.result;
+        a.click();
+        document.body.removeChild(a);
+    };
+    reader.onerror = function () {
+        a.href = URL.createObjectURL(blob);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+    };
+    reader.readAsDataURL(blob);
 }
 
 function initInternalMarksModule() {
@@ -8390,6 +9387,8 @@ function initInternalMarksModule() {
     const classListPaste = document.getElementById('iaClassListPaste');
     const printClassBtn = document.getElementById('iaPrintClassBtn');
     const excelClassBtn = document.getElementById('iaExcelClassBtn');
+    const printFinalBtn = document.getElementById('iaPrintFinalBtn');
+    const excelFinalBtn = document.getElementById('iaExcelFinalBtn');
 
     if (subTabMarks && marksContainer) {
         subTabMarks.addEventListener('click', function () {
@@ -8493,6 +9492,45 @@ function initInternalMarksModule() {
             downloadHtmlAsExcel(table, 'MGM_Internal_Marks_' + iaCurrentStream() + '_' + String(subj).replace(/[^\w]+/g, '_') + '.xls');
         });
     }
+
+    if (printFinalBtn) {
+        printFinalBtn.addEventListener('click', function () {
+            const yr = yearSelect ? yearSelect.value : 'First Year';
+            const sec = sectionSelect ? sectionSelect.value : 'A';
+            const sem = semSelect ? semSelect.value : 'I';
+            const sRoll = startRoll ? startRoll.value.trim() : '';
+            const eRoll = endRoll ? endRoll.value.trim() : '';
+            let rolls = currentIaRollObjects;
+            if (!rolls.length) rolls = parseMarksRollNumbers(sRoll, eRoll);
+            if (!rolls.length) {
+                alert('Enter a roll range and load students (or print after loading).');
+                return;
+            }
+            const subj = subjectSelect ? subjectSelect.value : '';
+            if (subj && rolls.length) saveIaMarksFromGrid(yr, sec, subj);
+            printAcademicPerformanceReport(yr, sec, sem, rolls);
+        });
+    }
+
+    if (excelFinalBtn) {
+        excelFinalBtn.addEventListener('click', function () {
+            const yr = yearSelect ? yearSelect.value : 'First Year';
+            const sec = sectionSelect ? sectionSelect.value : 'A';
+            const sem = semSelect ? semSelect.value : 'I';
+            const sRoll = startRoll ? startRoll.value.trim() : '';
+            const eRoll = endRoll ? endRoll.value.trim() : '';
+            let rolls = currentIaRollObjects;
+            if (!rolls.length) rolls = parseMarksRollNumbers(sRoll, eRoll);
+            if (!rolls.length) {
+                alert('Enter a roll range and load students first.');
+                return;
+            }
+            const subj = subjectSelect ? subjectSelect.value : '';
+            if (subj && rolls.length) saveIaMarksFromGrid(yr, sec, subj);
+            const pages = buildAcademicPerformanceExcelHtml(yr, sec, sem, rolls);
+            downloadHtmlAsExcel(pages, 'MGM_Academic_Performance_' + iaCurrentStream() + '_' + sem + '_Sem.xls');
+        });
+    }
 }
 
 
@@ -8504,6 +9542,7 @@ function updateHistoryTabStyles() {
     const titleEl = document.getElementById('historyDrawerTitle');
     const subEl = document.getElementById('todayDrawerSubtitle');
     const filterRow = document.getElementById('allHistoryFilterRow');
+    const dateFilter = document.getElementById('allHistoryDateFilter');
 
     if (tabToday && tabAll) {
         if (currentHistoryTabMode === 'ALL') {
@@ -8512,16 +9551,18 @@ function updateHistoryTabStyles() {
             tabAll.style.background = 'var(--primary-color, #6366f1)';
             tabAll.style.color = '#fff';
             if (titleEl) titleEl.textContent = 'All History';
-            if (subEl) subEl.textContent = 'View, edit or delete any past class entry';
+            if (subEl) subEl.textContent = 'Grouped by year & section — edit or delete any entry';
             if (filterRow) filterRow.style.display = 'flex';
+            if (dateFilter) dateFilter.style.display = '';
         } else {
             tabToday.style.background = 'var(--primary-color, #6366f1)';
             tabToday.style.color = '#fff';
             tabAll.style.background = 'transparent';
             tabAll.style.color = 'var(--text-muted, #94a3b8)';
             if (titleEl) titleEl.textContent = 'Today’s entries';
-            if (subEl) subEl.textContent = 'Correct any class you marked today';
-            if (filterRow) filterRow.style.display = 'none';
+            if (subEl) subEl.textContent = 'Grouped by year & section — correct any class marked today';
+            if (filterRow) filterRow.style.display = 'flex';
+            if (dateFilter) dateFilter.style.display = 'none';
         }
     }
 }
@@ -8531,7 +9572,10 @@ function initHistoryDrawerTabs() {
     const tabAll = document.getElementById('historyTabAll');
     const clearFilterBtn = document.getElementById('clearAllHistoryFilterBtn');
     const yearFilter = document.getElementById('allHistoryYearFilter');
+    const sectionFilter = document.getElementById('allHistorySectionFilter');
     const dateFilter = document.getElementById('allHistoryDateFilter');
+
+    try { populateHistorySectionFilter(); } catch (e) {}
 
     if (tabToday) {
         tabToday.onclick = (e) => {
@@ -8558,14 +9602,19 @@ function initHistoryDrawerTabs() {
 
     if (yearFilter) {
         yearFilter.onchange = () => {
-            currentHODYearFilter = yearFilter.value;
+            try { populateHistorySectionFilter(); } catch (e) {}
+            renderHistoryList();
+        };
+    }
+
+    if (sectionFilter) {
+        sectionFilter.onchange = () => {
             renderHistoryList();
         };
     }
 
     if (dateFilter) {
         dateFilter.onchange = () => {
-            currentHODDateFilter = dateFilter.value;
             renderHistoryList();
         };
     }
@@ -8574,9 +9623,9 @@ function initHistoryDrawerTabs() {
         clearFilterBtn.onclick = (e) => {
             if (e) e.preventDefault();
             if (yearFilter) yearFilter.value = 'ALL';
+            if (sectionFilter) sectionFilter.value = 'ALL';
             if (dateFilter) dateFilter.value = '';
-            currentHODYearFilter = 'ALL';
-            currentHODDateFilter = '';
+            try { populateHistorySectionFilter(); } catch (e2) {}
             renderHistoryList();
         };
     }
@@ -8688,29 +9737,32 @@ let isFetchingAllServerHistory = false;
 
 function getActiveDrawerEntries() {
     const allItems = readAllHistory();
+    const yearFilter = document.getElementById('allHistoryYearFilter');
+    const sectionFilter = document.getElementById('allHistorySectionFilter');
+    const dateFilter = document.getElementById('allHistoryDateFilter');
+
+    const selYear = yearFilter ? yearFilter.value : 'ALL';
+    const selSection = sectionFilter ? sectionFilter.value : 'ALL';
+    const selDate = (currentHistoryTabMode === 'ALL' && dateFilter && dateFilter.value)
+        ? normalizeHistoryDate(dateFilter.value)
+        : '';
+
+    let base = [];
     if (currentHistoryTabMode === 'ALL') {
-        const yearFilter = document.getElementById('allHistoryYearFilter');
-        const dateFilter = document.getElementById('allHistoryDateFilter');
-        
-        const selYear = yearFilter ? yearFilter.value : 'ALL';
-        const selDate = dateFilter && dateFilter.value ? normalizeHistoryDate(dateFilter.value) : '';
-
-        // Strict stream filter — never fall back to another department's entries
-        const matched = allItems.filter(item => {
-            if (!isStreamMatch(item.stream, currentDept)) return false;
-            if (selYear && selYear !== 'ALL' && isYearMatching(item.year, selYear) === false) return false;
-            if (selDate && selDate !== '' && normalizeHistoryDate(item.date) !== selDate) return false;
-            return true;
-        });
-
-        return matched.sort((a, b) => {
-            const dA = normalizeHistoryDate(a.date) || '';
-            const dB = normalizeHistoryDate(b.date) || '';
-            if (dA !== dB) return dB.localeCompare(dA);
-            return (parseInt(b.slot, 10) || 1) - (parseInt(a.slot, 10) || 1);
-        });
+        base = allItems.filter(item => isStreamMatch(item.stream, currentDept));
+    } else {
+        base = getTodayEntries();
     }
-    return getTodayEntries();
+
+    const matched = base.filter(item => {
+        if (currentHistoryTabMode === 'ALL' && !isStreamMatch(item.stream, currentDept)) return false;
+        if (selYear && selYear !== 'ALL' && isYearMatching(item.year, selYear) === false) return false;
+        if (!historySectionFilterMatches(item.section, selSection)) return false;
+        if (selDate && selDate !== '' && normalizeHistoryDate(item.date) !== selDate) return false;
+        return true;
+    });
+
+    return finalizeHistoryDrawerOrder(matched);
 }
 
 function fetchAllServerHistory(cb) {
