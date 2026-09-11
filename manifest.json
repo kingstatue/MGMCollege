@@ -1,8 +1,8 @@
 {
   "id": "/mgm-college-day-absentee/",
-  "name": "MGM College Absentee Informer",
-  "short_name": "College Absentee",
-  "description": "Absentee logging portal for MGM Day College multi-stream faculty",
+  "name": "MGM MAPAS — Mark, Attendance & Parent Alert System",
+  "short_name": "MGM MAPAS",
+  "description": "MGM MAPAS — Mark, Attendance & Parent Alert System · Mātā–Pitṛ–Āchārya Sūchanā Praṇālī. Daily parent alerts with faculty tools for entry, shortage, marks and reports.",
   "start_url": "./index.html?app=college",
   "scope": "./",
   "display": "standalone",

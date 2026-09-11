@@ -4500,7 +4500,7 @@ function initDepartmentManager() {
         if (loginBtnEl) {
             loginBtnEl.disabled = !!busy;
             const span = loginBtnEl.querySelector('span');
-            if (span) span.textContent = busy ? 'Checking PIN…' : 'Enter Absentee Informer';
+            if (span) span.textContent = busy ? 'Checking PIN…' : 'Enter MGM MAPAS';
         }
     };
 
@@ -6656,7 +6656,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v81b_offline_toast';
+    const APP_VER = 'v82b_mapas_dual';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
