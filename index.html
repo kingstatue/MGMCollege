@@ -24,11 +24,11 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
-  <link rel="stylesheet" href="styles.css?v=v32.31-year-aliases">
+  <link rel="stylesheet" href="styles.css?v=v32.32-space-hdr">
   <script>
     // Auto-update after GitHub Pages deploy (runs before app.js) — does not touch attendance data
     (function () {
-      var EXPECTED = 'v32.31-year-aliases';
+      var EXPECTED = 'v32.32-space-hdr';
       var KEY = 'mgm_shell_ver';
       var OWN_CACHE_PREFIX = 'mgm-absentee-informer';
       var reloading = false;
@@ -96,7 +96,7 @@
       // 2) Register SW with versioned URL so GitHub Pages cannot keep old sw.js forever
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          var swUrl = './sw.js?v=v102-year-aliases';
+          var swUrl = './sw.js?v=v103-space-hdr';
           navigator.serviceWorker.register(swUrl, { updateViaCache: 'none' })
             .then(function (reg) {
               if (navigator.onLine) {
@@ -1128,8 +1128,8 @@
 
   <datalist id="subjectDatalist"></datalist>
 
-  <script src="parser.js?v=v32.31-year-aliases"></script>
-  <script src="app.js?v=v32.31-year-aliases"></script>
+  <script src="parser.js?v=v32.32-space-hdr"></script>
+  <script src="app.js?v=v32.32-space-hdr"></script>
 <!-- Bulk Past Class Generator Modal -->
     <div class="modal-overlay" id="bulkGeneratorModal">
       <div class="modal-card" style="max-width: 460px;">
@@ -1231,10 +1231,11 @@
         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; line-height: 1.45;">
           Use a <strong>header block</strong> for Year · Section · Subject, then one line per class:
           <strong>Date · Absentee rolls</strong> (or NIL). Year can be <strong>1st</strong>, <strong>I</strong>, <strong>FY</strong>, <strong>1st Year</strong>, <strong>I BCA</strong>, etc.
+          Headers work with spaces on phone: <em>1 C FOC prefix C0</em> — or pipes: <em>1 | C | FOC</em>.
           Dates can be <strong>1/8</strong>, <strong>1 Aug</strong>, or <strong>2026-08-01</strong>.
           Slot is optional — uses <strong>Default Slot</strong> (or write <em>Slot 2</em>).
-          Short rolls (<strong>09, 17</strong>) expand with <strong>Default Prefix</strong> or a header like
-          <em>First Year | A | DBMS | Prefix 25A</em>. Preview shows the full rolls before Load.
+          Short rolls (<strong>09, 17</strong>) expand with <strong>Default Prefix</strong> or <em>prefix C0</em> on the header.
+          Preview shows the full rolls before Load.
           Loads through the same Submit path — conflict checks stay unchanged.
         </p>
         <div class="form-group" style="margin-bottom: 10px;">
@@ -1247,7 +1248,7 @@
         </div>
         <div class="form-group" style="margin-bottom: 10px;">
           <label for="paperPasteText">Paste here</label>
-          <textarea id="paperPasteText" class="form-input" rows="9" placeholder="1st | A | DBMS | Prefix 25A&#10;1/8  09, 17, 21&#10;5 Aug  05, 12&#10;12/8/26  NIL&#10;&#10;II BCA | B | DBMS&#10;1/8  03, 11&#10;5 Aug  Slot 2  07"></textarea>
+          <textarea id="paperPasteText" class="form-input" rows="9" placeholder="1 C FOC prefix C0&#10;1/8  09, 17, 21&#10;5 Aug  05, 12&#10;12/8/26  NIL&#10;&#10;2 B DBMS prefix 25B&#10;1/8  03, 11&#10;5 Aug  Slot 2  07"></textarea>
         </div>
         <div id="paperPastePreview" class="paper-paste-preview" hidden></div>
         <div class="modal-buttons">

@@ -4172,20 +4172,144 @@ function paperPasteParseDataLine(line, defaultSlot) {
 function paperPasteParseYear(raw) {
     let s = String(raw || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (!s) return '';
-    // Allow "1st Year", "I BCA", "2 B.Com", "III BSC", etc.
+    // Allow "1st Year", "I BCA", "2 B.Com", "III BSC" — strip stream tags / "year"
     s = s.replace(/\b(b\.?\s*c\.?\s*a\.?|bca|b\.?\s*com\.?|bcm|b\.?\s*a\.?|ba|b\.?\s*sc\.?|bsc)\b/g, ' ');
     s = s.replace(/\byears?\b/g, ' ');
     s = s.replace(/[|.,;:_/+]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!s) return '';
 
-    // Longer tokens first (iii before ii before i)
-    if (/\b(third|3rd|iii|ty)\b/.test(s) || s === '3' || s === 'iii') return 'Third Year';
-    if (/\b(second|2nd|ii|sy)\b/.test(s) || s === '2' || s === 'ii') return 'Second Year';
-    if (/\b(first|1st|fy)\b/.test(s) || s === '1' || s === 'i') return 'First Year';
+    // Longer tokens first (iii before ii before i; 1st before 1)
+    if (/\b(third|3rd|iii|ty)\b/.test(s)) return 'Third Year';
+    if (/\b(second|2nd|ii|sy)\b/.test(s)) return 'Second Year';
+    if (/\b(first|1st|fy)\b/.test(s)) return 'First Year';
+
+    // Roman numerals as whole tokens (works inside "i a dbms")
+    if (/(^|\s)iii(\s|$)/.test(s)) return 'Third Year';
+    if (/(^|\s)ii(\s|$)/.test(s)) return 'Second Year';
+    if (/(^|\s)i(\s|$)/.test(s)) return 'First Year';
+
+    // Bare 1 / 2 / 3 as whole tokens (not "12" or "1st")
+    if (/(^|\s)3(\s|$)/.test(s)) return 'Third Year';
+    if (/(^|\s)2(\s|$)/.test(s)) return 'Second Year';
+    if (/(^|\s)1(\s|$)/.test(s)) return 'First Year';
 
     if (s.indexOf('third') !== -1) return 'Third Year';
     if (s.indexOf('second') !== -1) return 'Second Year';
     if (s.indexOf('first') !== -1) return 'First Year';
     return '';
+}
+
+function paperPasteIsStreamToken(tok) {
+    return /^(bca|bcm|ba|bsc|b\.?\s*com\.?|b\.?\s*a\.?|b\.?\s*sc\.?)$/i.test(String(tok || '').trim());
+}
+
+function paperPasteIsAloneYearToken(tok) {
+    return /^(first|second|third|1st|2nd|3rd|fy|sy|ty|iii|ii|i|[123])$/i.test(String(tok || '').trim());
+}
+
+/**
+ * Mobile-friendly space header:
+ *   1 C FOC
+ *   1 C FOC prefix C0
+ *   1st Year A DBMS prefix 25A
+ *   I BCA C FOC
+ */
+function paperPasteParseSpaceHeader(raw) {
+    const line = String(raw || '').trim();
+    if (!line) return null;
+    // Date lines are not headers
+    if (/^\d{1,2}[\/.\-]\d/.test(line) || /^\d{4}-\d{2}-\d{2}/.test(line)) return null;
+    if (/^[A-Za-z]{3,9}\.?\s+\d{1,2}\b/i.test(line) && paperPasteLineHasDate(line)) return null;
+
+    let tokens = line.split(/\s+/).filter(Boolean);
+    if (tokens.length < 3) return null;
+
+    let prefix = '';
+    const prefIdx = tokens.findIndex(t => /^(prefix|pref|pfx)$/i.test(t));
+    if (prefIdx !== -1) {
+        if (prefIdx >= tokens.length - 1) return null;
+        prefix = paperPasteNormalizePrefixValue(tokens[prefIdx + 1]);
+        tokens = tokens.slice(0, prefIdx).concat(tokens.slice(prefIdx + 2));
+    }
+    if (tokens.length < 3) return null;
+
+    let idx = 0;
+    let year = '';
+    if (paperPasteIsAloneYearToken(tokens[0])) {
+        year = paperPasteParseYear(tokens[0]);
+        idx = 1;
+        if (tokens[idx] && /^(year|years)$/i.test(tokens[idx])) idx++;
+        if (tokens[idx] && paperPasteIsStreamToken(tokens[idx])) idx++;
+    } else if (tokens.length >= 2 && paperPasteParseYear(tokens[0] + ' ' + tokens[1]) &&
+        /^(first|second|third|1st|2nd|3rd)$/i.test(tokens[0]) && /^(year|years)$/i.test(tokens[1])) {
+        year = paperPasteParseYear(tokens[0] + ' ' + tokens[1]);
+        idx = 2;
+        if (tokens[idx] && paperPasteIsStreamToken(tokens[idx])) idx++;
+    } else {
+        return null;
+    }
+    if (!year || idx >= tokens.length) return null;
+
+    let section = String(tokens[idx] || '').replace(/^SEC(TION)?$/i, '').trim();
+    if (/^SEC(TION)?$/i.test(tokens[idx]) && tokens[idx + 1]) {
+        section = String(tokens[idx + 1]).trim();
+        idx += 2;
+    } else {
+        idx += 1;
+    }
+    section = (typeof paperPasteParseSection === 'function' ? paperPasteParseSection(section) : section) || section;
+
+    const subject = tokens.slice(idx).join(' ').trim();
+    if (!section || !subject) return null;
+    if (paperPasteParseYear(section)) return null;
+    if (typeof paperPasteParseDate === 'function' && paperPasteParseDate(subject)) return null;
+
+    return { year: year, section: section, subject: subject, prefix: prefix || '' };
+}
+
+/** Header line: Year · Section · Subject [· Prefix] (pipes or spaces). */
+function paperPasteParseBlockHeader(line) {
+    const raw = String(line || '').trim();
+    if (!raw) return null;
+
+    // Prefer mobile space form when there are no pipe/tab separators
+    if (raw.indexOf('|') === -1 && raw.indexOf('\t') === -1 && !/\s+\/\s+/.test(raw)) {
+        const spaced = paperPasteParseSpaceHeader(raw);
+        if (spaced) return spaced;
+    }
+
+    // Pipe / tab / slash / comma parts
+    let parts = paperPasteSplitHeaderParts(raw);
+    if (parts.length >= 3) {
+        const yearParsed = paperPasteParseYear(parts[0]);
+        if (yearParsed) {
+            let sectionRaw = parts[1].replace(/^SEC(TION)?\s*/i, '').trim();
+            const section = paperPasteParseSection(sectionRaw) || sectionRaw;
+            let prefix = '';
+            let subjectParts = parts.slice(2);
+            if (subjectParts.length >= 2 && paperPasteLooksLikePrefix(subjectParts[subjectParts.length - 1])) {
+                prefix = paperPasteNormalizePrefixValue(subjectParts[subjectParts.length - 1]);
+                subjectParts = subjectParts.slice(0, -1);
+            }
+            let subject = subjectParts.join(' ').trim();
+            const stripped = paperPasteStripPrefixFromSubject(subject);
+            if (stripped.prefix) {
+                subject = stripped.subject;
+                if (!prefix) prefix = stripped.prefix;
+            }
+            if (section && subject && !paperPasteParseYear(section)) {
+                return {
+                    year: yearParsed,
+                    section: section,
+                    subject: subject,
+                    prefix: prefix
+                };
+            }
+        }
+    }
+
+    // Last chance: space header even if commas confused the splitter
+    return paperPasteParseSpaceHeader(raw);
 }
 
 function paperPasteParseSlot(raw) {
@@ -4318,57 +4442,6 @@ function paperPastePrefillPrefixField() {
             if (stored) el.value = stored;
         }
     } catch (e2) {}
-}
-
-/** Header line: Year · Section · Subject [· Prefix] (no class date). */
-function paperPasteParseBlockHeader(line) {
-    const raw = String(line || '').trim();
-    if (!raw) return null;
-    if (paperPasteParseDate(raw) && /^\d/.test(raw)) return null;
-
-    let parts = paperPasteSplitHeaderParts(raw);
-    if (parts.length >= 3) {
-        const year = paperPasteParseYear(parts[0]) || parts[0];
-        let sectionRaw = parts[1].replace(/^SEC(TION)?\s*/i, '').trim();
-        const section = paperPasteParseSection(sectionRaw) || sectionRaw;
-        let prefix = '';
-        let subjectParts = parts.slice(2);
-        if (subjectParts.length >= 2 && paperPasteLooksLikePrefix(subjectParts[subjectParts.length - 1])) {
-            prefix = paperPasteNormalizePrefixValue(subjectParts[subjectParts.length - 1]);
-            subjectParts = subjectParts.slice(0, -1);
-        }
-        let subject = subjectParts.join(' ').trim();
-        const stripped = paperPasteStripPrefixFromSubject(subject);
-        if (stripped.prefix) {
-            subject = stripped.subject;
-            if (!prefix) prefix = stripped.prefix;
-        }
-        if (year && section && subject) {
-            return {
-                year: paperPasteParseYear(year) || year,
-                section: section,
-                subject: subject,
-                prefix: prefix
-            };
-        }
-    }
-
-    const year = paperPasteParseYear(raw);
-    if (!year) return null;
-    let rest = raw.replace(/first\s*year|second\s*year|third\s*year|1st\s*year|2nd\s*year|3rd\s*year|\bI\b|\bII\b|\bIII\b/ig, ' ').trim();
-    rest = rest.replace(/^[\s\-–,|\/]+/, '').trim();
-    const secMatch = rest.match(/^(?:sec(?:tion)?\s*)?([A-Za-z0-9()+\-_\/ ]{1,24}?)(?:\s{2,}|\s+)(.+)$/i);
-    if (!secMatch) return null;
-    const section = paperPasteParseSection(secMatch[1].trim()) || secMatch[1].trim();
-    let subject = String(secMatch[2] || '').trim();
-    let prefix = '';
-    const stripped = paperPasteStripPrefixFromSubject(subject);
-    if (stripped.prefix) {
-        subject = stripped.subject;
-        prefix = stripped.prefix;
-    }
-    if (!section || !subject || paperPasteParseDate(subject)) return null;
-    return { year: year, section: section, subject: subject, prefix: prefix };
 }
 
 function paperPasteReadDefaultSlot() {
@@ -6849,7 +6922,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v86_year_aliases';
+    const APP_VER = 'v87_space_headers';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
