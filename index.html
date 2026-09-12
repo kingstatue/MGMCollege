@@ -24,11 +24,11 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
-  <link rel="stylesheet" href="styles.css?v=v32.29-paste-prefix">
+  <link rel="stylesheet" href="styles.css?v=v32.30-no-dup-today">
   <script>
     // Auto-update after GitHub Pages deploy (runs before app.js) — does not touch attendance data
     (function () {
-      var EXPECTED = 'v32.29-paste-prefix';
+      var EXPECTED = 'v32.30-no-dup-today';
       var KEY = 'mgm_shell_ver';
       var OWN_CACHE_PREFIX = 'mgm-absentee-informer';
       var reloading = false;
@@ -96,7 +96,7 @@
       // 2) Register SW with versioned URL so GitHub Pages cannot keep old sw.js forever
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          var swUrl = './sw.js?v=v100-paste-prefix';
+          var swUrl = './sw.js?v=v101-no-dup-today';
           navigator.serviceWorker.register(swUrl, { updateViaCache: 'none' })
             .then(function (reg) {
               if (navigator.onLine) {
@@ -536,10 +536,6 @@
 
           <button type="button" class="btn-secondary" id="openPaperPasteModalBtn" style="margin-top: 8px; width: 100%; font-weight: 700;">
             📋 Paste past classes (header blocks)
-          </button>
-
-          <button type="button" class="btn-secondary history-open-btn" id="historyBtnTyping" style="margin-top: 8px; width: 100%;">
-            Today’s entries — Edit / Delete
           </button>
         </form>
 
@@ -1132,8 +1128,8 @@
 
   <datalist id="subjectDatalist"></datalist>
 
-  <script src="parser.js?v=v32.29-paste-prefix"></script>
-  <script src="app.js?v=v32.29-paste-prefix"></script>
+  <script src="parser.js?v=v32.30-no-dup-today"></script>
+  <script src="app.js?v=v32.30-no-dup-today"></script>
 <!-- Bulk Past Class Generator Modal -->
     <div class="modal-overlay" id="bulkGeneratorModal">
       <div class="modal-card" style="max-width: 460px;">
