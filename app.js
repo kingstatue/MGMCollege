@@ -2906,8 +2906,70 @@ function compactAttendanceHistory(history) {
 }
 
 function saveHistoryToLocalStorage(history) {
-    const json = JSON.stringify(history);
-    try { localStorage.setItem('mgm_attendance_history', json); } catch (e) {}
+    const list = Array.isArray(history) ? history : [];
+    const json = JSON.stringify(list);
+    try {
+        localStorage.setItem('mgm_attendance_history', json);
+        return true;
+    } catch (e) {
+        try {
+            localStorage.removeItem('mgm_attendance_history');
+            localStorage.setItem('mgm_attendance_history', json);
+            return true;
+        } catch (e2) {
+            console.warn('localStorage history save failed:', e2);
+            return false;
+        }
+    }
+}
+
+function verifyHistorySave(expectedLen) {
+    try {
+        const round = JSON.parse(localStorage.getItem('mgm_attendance_history') || '[]');
+        return Array.isArray(round) && round.length === expectedLen;
+    } catch (e) {
+        return false;
+    }
+}
+
+let mgmLastHardSheetSyncAt = 0;
+
+/**
+ * Hard-replace one stream on the phone with Raw Data rows (no merge with old cards).
+ */
+function hardReplaceStreamHistoryFromServer(stream, serverEntries) {
+    const prev = readAllHistory();
+    const byKey = new Map();
+    prev.forEach(item => {
+        if (!item) return;
+        if (!isStreamMatch(item.stream || 'BCA', stream)) {
+            byKey.set(historyMatchKey(item), item);
+        }
+    });
+    (serverEntries || []).forEach(sEntry => {
+        byKey.set(historyMatchKey(sEntry), mergeServerHistoryEntry(sEntry, null));
+    });
+
+    const merged = compactAttendanceHistory(Array.from(byKey.values()));
+    let saved = saveHistoryToLocalStorage(merged);
+    let verified = saved && verifyHistorySave(merged.length);
+    if (!verified) {
+        try {
+            localStorage.removeItem('mgm_attendance_history');
+            const sheetOnly = compactAttendanceHistory(serverEntries || []);
+            saved = saveHistoryToLocalStorage(sheetOnly);
+            verified = saved && verifyHistorySave(sheetOnly.length);
+        } catch (e) {}
+    }
+    mgmLastHardSheetSyncAt = Date.now();
+    renderHistoryList();
+    updateSyncButtonState();
+    const phoneStreamCount = readAllHistory().filter(i => isStreamMatch(i.stream || 'BCA', stream)).length;
+    return {
+        ok: verified || phoneStreamCount === (serverEntries || []).length,
+        sheetCount: (serverEntries || []).length,
+        phoneCount: phoneStreamCount
+    };
 }
 
 function pruneOldHistory() {
@@ -3221,6 +3283,7 @@ function scheduleHistoryRefreshFromSheet(dateVal, delayMs) {
     const d = normalizeHistoryDate(dateVal) || getTodayISOString();
     const today = getTodayISOString();
     setTimeout(() => {
+        if (mgmLastHardSheetSyncAt && (Date.now() - mgmLastHardSheetSyncAt) < 12000) return;
         if (d === today && typeof fetchTodayServerHistory === 'function') {
             fetchTodayServerHistory();
         } else if (typeof fetchFullSheetHistory === 'function') {
@@ -3233,6 +3296,7 @@ function scheduleHistoryRefreshFromSheet(dateVal, delayMs) {
 
 function fetchTodayServerHistory() {
     if (isFetchingServerHistory) return;
+    if (mgmLastHardSheetSyncAt && (Date.now() - mgmLastHardSheetSyncAt) < 8000) return;
     isFetchingServerHistory = true;
 
     const stream = currentDept || 'BCA';
@@ -3256,7 +3320,7 @@ function fetchTodayServerHistory() {
 
         if (data && data.result === 'success' && Array.isArray(data.entries)) {
             const serverEntries = data.entries.map(e => mapServerHistoryEntry(e, stream, dateVal));
-            applyServerHistoryMerge(stream, serverEntries, 'dates', new Set([dateVal]));
+            applyServerHistoryMerge(stream, serverEntries, 'dates', new Set([dateVal]), { dropOffline: true });
         }
     };
 
@@ -3282,8 +3346,6 @@ function fetchTodayServerHistory() {
 function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
     opts = opts || {};
     const quiet = !!opts.quiet;
-    // Manual Sync Sheet / Clear Cache: drop stuck Pending for this stream so phone matches Raw
-    const dropOffline = opts.dropOffline !== undefined ? !!opts.dropOffline : !quiet;
     const targetUrl = getWebhookUrl(stream);
     if (!targetUrl) return;
     const syncBtn = document.getElementById('syncSheetHistoryBtn');
@@ -3315,9 +3377,19 @@ function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
 
         if (data && data.result === 'success' && Array.isArray(data.entries)) {
             const serverEntries = data.entries.map(e => mapServerHistoryEntry(e, stream, null));
-            applyServerHistoryMerge(stream, serverEntries, 'stream', null, { dropOffline: dropOffline });
+            const result = hardReplaceStreamHistoryFromServer(stream, serverEntries);
             if (!quiet) {
-                showCustomToast('🔄 Synced with Sheet!', `Loaded ${serverEntries.length} active entries from Google Sheet.`);
+                if (!result.ok) {
+                    showCustomToast(
+                        '⚠️ Phone storage problem',
+                        'Sheet ' + result.sheetCount + ' rows but phone could not save. Clear this site’s data, then Sync Sheet.'
+                    );
+                } else {
+                    showCustomToast(
+                        '🔄 Synced with Sheet!',
+                        'Sheet ' + result.sheetCount + ' · phone ' + result.phoneCount + ' (' + stream + '). All History + clear filters to compare.'
+                    );
+                }
             }
         } else if (data && (data.error === 'Unauthorized' || data.result === 'error')) {
             if (!quiet) {
@@ -3351,11 +3423,10 @@ function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
 function clearLocalHistoryCache() {
     if (confirm("Clear local browser history cache?\n\nThis will remove local cached entries and reload fresh entries directly from Google Sheet.")) {
         try { localStorage.removeItem('mgm_attendance_history'); } catch (e) {}
-        // Do not touch mgm_bca_* / mgmec_* — those belong to other installed apps
-        try { renderHistoryList(); } catch (e) {}
+        try { renderHistoryList(); } catch (e2) {}
         showCustomToast('🧹 Local Cache Cleared!', 'Fetching fresh entries from Google Sheet...');
         if (typeof fetchFullSheetHistory === 'function') {
-            fetchFullSheetHistory();
+            fetchFullSheetHistory(currentDept || 'BCA');
         }
     }
 }
@@ -10233,8 +10304,8 @@ function fetchAllServerHistory(cb) {
 
         if (data && data.result === 'success' && Array.isArray(data.entries)) {
             const serverEntries = data.entries.map(e => mapServerHistoryEntry(e, stream, null));
-            // Same as Sync Sheet: Raw Data wins (fixes sheet-has-2 / phone-has-1 and the reverse)
-            applyServerHistoryMerge(stream, serverEntries, 'stream', null, { dropOffline: true });
+            // Hard replace so All History matches Raw Data
+            hardReplaceStreamHistoryFromServer(stream, serverEntries);
         }
         if (cb) cb();
     };
