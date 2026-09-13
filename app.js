@@ -3168,9 +3168,11 @@ function historyMatchKey(item) {
  * replaceMode:
  *  - 'stream' = drop same-stream synced locals not returned by sheet (Sync Sheet / All History)
  *  - 'dates'  = drop synced locals only for the given date set (today refresh)
- * Always keeps offline:true queue and other streams.
+ * Always keeps offline:true queue and other streams — unless opts.dropOffline (explicit Sync Sheet).
  */
-function applyServerHistoryMerge(stream, serverEntries, replaceMode, dateSet) {
+function applyServerHistoryMerge(stream, serverEntries, replaceMode, dateSet, opts) {
+    opts = opts || {};
+    const dropOffline = !!opts.dropOffline;
     const history = readAllHistory();
     const byKey = new Map();
     const dates = dateSet instanceof Set ? dateSet : null;
@@ -3178,12 +3180,16 @@ function applyServerHistoryMerge(stream, serverEntries, replaceMode, dateSet) {
     history.forEach(item => {
         if (!item) return;
         const k = historyMatchKey(item);
+        const itemStream = item.stream || 'BCA';
+        const sameStream = isStreamMatch(itemStream, stream);
+
         if (item.offline === true) {
+            // Explicit Sync Sheet: Raw Data wins — drop stuck Pending rows for this stream
+            if (dropOffline && sameStream) return;
             byKey.set(k, item);
             return;
         }
-        const itemStream = item.stream || 'BCA';
-        if (!isStreamMatch(itemStream, stream)) {
+        if (!sameStream) {
             byKey.set(k, item);
             return;
         }
@@ -3218,7 +3224,7 @@ function scheduleHistoryRefreshFromSheet(dateVal, delayMs) {
         if (d === today && typeof fetchTodayServerHistory === 'function') {
             fetchTodayServerHistory();
         } else if (typeof fetchFullSheetHistory === 'function') {
-            fetchFullSheetHistory();
+            fetchFullSheetHistory(currentDept || 'BCA', { quiet: true });
         } else if (typeof fetchTodayServerHistory === 'function') {
             fetchTodayServerHistory();
         }
@@ -3241,7 +3247,7 @@ function fetchTodayServerHistory() {
     const timeout = setTimeout(() => {
         isFetchingServerHistory = false;
         try { delete window[cbName]; } catch (e) {}
-    }, 6000);
+    }, 25000);
 
     window[cbName] = function (data) {
         clearTimeout(timeout);
@@ -3276,6 +3282,8 @@ function fetchTodayServerHistory() {
 function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
     opts = opts || {};
     const quiet = !!opts.quiet;
+    // Manual Sync Sheet / Clear Cache: drop stuck Pending for this stream so phone matches Raw
+    const dropOffline = opts.dropOffline !== undefined ? !!opts.dropOffline : !quiet;
     const targetUrl = getWebhookUrl(stream);
     if (!targetUrl) return;
     const syncBtn = document.getElementById('syncSheetHistoryBtn');
@@ -3307,7 +3315,7 @@ function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
 
         if (data && data.result === 'success' && Array.isArray(data.entries)) {
             const serverEntries = data.entries.map(e => mapServerHistoryEntry(e, stream, null));
-            applyServerHistoryMerge(stream, serverEntries, 'stream');
+            applyServerHistoryMerge(stream, serverEntries, 'stream', null, { dropOffline: dropOffline });
             if (!quiet) {
                 showCustomToast('🔄 Synced with Sheet!', `Loaded ${serverEntries.length} active entries from Google Sheet.`);
             }
@@ -10226,7 +10234,7 @@ function fetchAllServerHistory(cb) {
         if (data && data.result === 'success' && Array.isArray(data.entries)) {
             const serverEntries = data.entries.map(e => mapServerHistoryEntry(e, stream, null));
             // Same as Sync Sheet: Raw Data wins (fixes sheet-has-2 / phone-has-1 and the reverse)
-            applyServerHistoryMerge(stream, serverEntries, 'stream');
+            applyServerHistoryMerge(stream, serverEntries, 'stream', null, { dropOffline: true });
         }
         if (cb) cb();
     };
