@@ -3221,6 +3221,7 @@ function updateSyncButtonState() {
 
 let isFetchingServerHistory = false;
 let isFetchingFullSheetHistory = false;
+let pendingQuietFullSync = null;
 
 function historyMatchKey(item) {
     return entryKey(item) + '|' + String(item.stream || 'BCA').trim().toUpperCase().replace('BCOM', 'BCM');
@@ -3349,11 +3350,13 @@ function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
     const quiet = !!opts.quiet;
     stream = stream || currentDept || 'BCA';
 
-    // Only one full Sync at a time (quiet background + manual clicks were colliding → network error)
+    // Only one full Sync at a time — queue quiet auto-sync; ask user to wait for manual
     if (isFetchingFullSheetHistory) {
-        if (!quiet) {
-            showCustomToast('⏳ Sync already running', 'Wait for the current Sync Sheet to finish, then try once.');
+        if (quiet) {
+            pendingQuietFullSync = { stream: stream, opts: Object.assign({}, opts, { quiet: true }) };
+            return;
         }
+        showCustomToast('⏳ Sync already running', 'Background sync in progress — it will finish shortly. Tap Sync Sheet again only if needed.');
         return;
     }
 
@@ -3380,6 +3383,14 @@ function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
         if (syncBtn) {
             syncBtn.disabled = false;
             syncBtn.textContent = '🔄 Sync Sheet';
+        }
+        // Run queued quiet auto-sync after lock clears
+        if (pendingQuietFullSync) {
+            const next = pendingQuietFullSync;
+            pendingQuietFullSync = null;
+            setTimeout(() => {
+                fetchFullSheetHistory(next.stream, next.opts);
+            }, 800);
         }
     };
 
@@ -3433,12 +3444,14 @@ function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
         clearTimeout(timeout);
         try { delete window[cbName]; } catch (e) {}
         finishBtn();
-        // One automatic retry for manual Sync (transient Apps Script / network blip)
-        if (!quiet && !retried) {
+        // Retry once: manual always; quiet auto-sync also (faculty may not tap Sync)
+        if (!retried) {
             setTimeout(() => {
-                fetchFullSheetHistory(stream, { quiet: false, _retried: true });
-            }, 2500);
-            showCustomToast('🔄 Retrying Sync…', 'First attempt failed — trying once more.');
+                fetchFullSheetHistory(stream, Object.assign({}, opts, { quiet: quiet, _retried: true }));
+            }, quiet ? 4000 : 2500);
+            if (!quiet) {
+                showCustomToast('🔄 Retrying Sync…', 'First attempt failed — trying once more.');
+            }
             return;
         }
         if (!quiet) {
@@ -6746,6 +6759,12 @@ document.addEventListener('DOMContentLoaded', () => {
         renderHistoryList();
         fetchTodayServerHistory();
         syncOfflineEntries();
+        // Faculty often open Today but never tap Sync — quiet full pull after a short delay
+        setTimeout(() => {
+            if (typeof fetchFullSheetHistory === 'function') {
+                fetchFullSheetHistory(currentDept || 'BCA', { quiet: true });
+            }
+        }, 2500);
     };
 
     const mainHistoryBtn = document.getElementById('historyBtn');
@@ -6778,15 +6797,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.addEventListener('online', () => {
         console.log('[Network] Back online - triggering auto-sync...');
-        syncOfflineEntries().then(() => fetchTodayServerHistory());
+        syncOfflineEntries().then(() => {
+            fetchTodayServerHistory();
+            // Staggered quiet full Sync — lock prevents collide with manual Sync Sheet
+            setTimeout(() => fetchFullSheetHistory(currentDept || 'BCA', { quiet: true }), 5000);
+        });
     });
 
     renderHistoryList();
     if (navigator.onLine) {
         setTimeout(() => {
-            // Today-only on open (like before). Full Sync Sheet is manual — avoids colliding
-            // background ALL pulls that caused college "network error" while Allstreams/MGMEC worked.
-            syncOfflineEntries().then(() => fetchTodayServerHistory());
+            syncOfflineEntries().then(() => {
+                fetchTodayServerHistory();
+                // Auto Sync on open for faculty who never tap Sync Sheet (quiet, locked, retried)
+                setTimeout(() => fetchFullSheetHistory(currentDept || 'BCA', { quiet: true }), 6000);
+            });
         }, 2000);
     }
 
