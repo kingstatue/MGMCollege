@@ -1855,10 +1855,11 @@ function showSlotConflictDialog(params) {
 
         const dialog = document.createElement('div');
         dialog.id = 'slotConflictModalDialog';
-        dialog.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100vw; height: 100vh; z-index: 9999999; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.88); padding: 16px; box-sizing: border-box; overflow-y: auto;';
+        dialog.style.cssText = 'position: fixed; inset: 0; width: 100%; height: 100%; height: 100dvh; z-index: 9999999; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.88); padding: max(12px, env(safe-area-inset-top)) 16px max(12px, env(safe-area-inset-bottom)); box-sizing: border-box; overflow-y: auto; -webkit-overflow-scrolling: touch;';
 
+        // Avoid class "modal-card" — styles.css translates it off-screen to the bottom on mobile.
         dialog.innerHTML = `
-            <div class="modal-card" style="max-width: 480px; width: 100%; padding: 20px; border: 2px solid ${borderColor}; background: #0f172a; color: #ffffff; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.9); box-sizing: border-box;">
+            <div style="max-width: 480px; width: 100%; margin: auto; padding: 20px; border: 2px solid ${borderColor}; background: #0f172a; color: #ffffff; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.9); box-sizing: border-box; max-height: min(85dvh, 85vh); overflow-y: auto; -webkit-overflow-scrolling: touch; transform: none;">
                 
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #334155;">
                     <h3 style="margin: 0; font-size: 1.15rem; color: ${titleColor}; font-weight: 800; display: flex; align-items: center; gap: 8px;">
@@ -1940,14 +1941,15 @@ function showCombinedSectionBlockDialog(params) {
         document.body.style.overflow = 'hidden';
         const dialog = document.createElement('div');
         dialog.id = 'slotConflictModalDialog';
-        dialog.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100vw; height: 100vh; z-index: 9999999; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.88); padding: 16px; box-sizing: border-box; overflow-y: auto;';
+        dialog.style.cssText = 'position: fixed; inset: 0; width: 100%; height: 100%; height: 100dvh; z-index: 9999999; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.88); padding: max(12px, env(safe-area-inset-top)) 16px max(12px, env(safe-area-inset-bottom)); box-sizing: border-box; overflow-y: auto; -webkit-overflow-scrolling: touch;';
 
         const existingLabel = sectionDisplayLabel(params.existingSection);
         const newLabel = sectionDisplayLabel(params.section);
         const tryingCombined = isCombinedSectionValue(params.section);
 
+        // Do not use class "modal-card" — styles.css slides .modal-card to bottom on mobile (sheet UI).
         dialog.innerHTML = `
-            <div class="modal-card" style="max-width: 480px; width: 100%; padding: 20px; border: 2px solid #ef4444; background: #0f172a; color: #ffffff; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.9); box-sizing: border-box;">
+            <div style="max-width: 480px; width: 100%; margin: auto; padding: 20px; border: 2px solid #ef4444; background: #0f172a; color: #ffffff; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.9); box-sizing: border-box; max-height: min(85dvh, 85vh); overflow-y: auto; -webkit-overflow-scrolling: touch; transform: none;">
                 <h3 style="margin: 0 0 12px 0; font-size: 1.1rem; color: #f87171; font-weight: 800;">⛔ Section conflict — cannot submit</h3>
                 <div style="font-size: 0.9rem; line-height: 1.5; color: #cbd5e1; margin-bottom: 14px;">
                     Slot <strong>${escapeHTML(String(params.slot))}</strong> on <strong>${escapeHTML(params.date)}</strong>

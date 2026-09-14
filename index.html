@@ -24,11 +24,11 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
-  <link rel="stylesheet" href="styles.css?v=v32.40-stream-pin-lock">
+  <link rel="stylesheet" href="styles.css?v=v32.43-hod-workspace">
   <script>
     // Auto-update after GitHub Pages deploy (runs before app.js) — does not touch attendance data
     (function () {
-      var EXPECTED = 'v32.40-stream-pin-lock';
+      var EXPECTED = 'v32.43-hod-workspace';
       var KEY = 'mgm_shell_ver';
       var OWN_CACHE_PREFIX = 'mgm-absentee-informer';
       var reloading = false;
@@ -96,7 +96,7 @@
       // 2) Register SW with versioned URL so GitHub Pages cannot keep old sw.js forever
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          var swUrl = './sw.js?v=v111-stream-pin-lock';
+          var swUrl = './sw.js?v=v114-hod-workspace';
           navigator.serviceWorker.register(swUrl, { updateViaCache: 'none' })
             .then(function (reg) {
               if (navigator.onLine) {
@@ -535,19 +535,19 @@
           </div>
 
           <button type="button" class="btn-secondary" id="openPaperPasteModalBtn" style="margin-top: 8px; width: 100%; font-weight: 700;">
-            📋 Paste past classes (header blocks)
+            📋 Paste past classes
           </button>
         </form>
 
       </div>
 
       <!-- HOD PORTAL CONTAINER -->
-      <div class="mode-container" id="hodSection" style="display: none;">
-        <div class="hod-header-card">
-          <div class="hod-title-group" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+      <div class="mode-container hod-workspace" id="hodSection" style="display: none;">
+        <div class="hod-header-card hod-workspace-chrome">
+          <div class="hod-title-group" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
             <div>
-              <h2 style="font-size: 1.25rem; font-weight: 800; color: var(--text-main); margin: 0; display: flex; align-items: center; gap: 8px;">
-                📱 Parent Informer
+              <h2 style="font-size: 1rem; font-weight: 800; color: var(--text-main); margin: 0; display: flex; align-items: center; gap: 8px;">
+                Parent Informer
                 <span id="hodRoleBadge" style="display: none;"></span>
               </h2>
             </div>
@@ -556,20 +556,21 @@
           </div>
           
         <!-- Parent Informer Sub-Tool Switcher Tabs -->
-        <div class="mode-switcher" style="margin-top: 14px; margin-bottom: 14px; background: rgba(0,0,0,0.25); padding: 4px; border-radius: 10px;">
-          <button class="mode-tab active" id="subTabDailyInformer" type="button" style="padding: 8px 12px; font-size: 0.82rem; font-weight: 700;">
-            📱 Daily Absentees Report
+        <div class="mode-switcher hod-sub-tabs" style="margin-top: 10px; margin-bottom: 0; background: rgba(0,0,0,0.25); padding: 4px; border-radius: 10px;">
+          <button class="mode-tab active" id="subTabDailyInformer" type="button" title="Daily Absentees Report">
+            Daily
           </button>
-          <button class="mode-tab" id="subTabShortageCalculator" type="button" style="padding: 8px 12px; font-size: 0.82rem; font-weight: 700;">
-            ⚠️ Attendance Shortage Report (< 75%)
+          <button class="mode-tab" id="subTabShortageCalculator" type="button" title="Attendance Shortage Report">
+            Shortage
           </button>
-          <button class="mode-tab" id="subTabInternalMarks" type="button" style="padding: 8px 12px; font-size: 0.82rem; font-weight: 700;">
-            📝 Internal Marks (2 × 10)
+          <button class="mode-tab" id="subTabInternalMarks" type="button" title="Internal Marks">
+            Marks
           </button>
+        </div>
         </div>
 
         <!-- CONTAINER 1: DAILY INFORMER -->
-        <div id="hodDailyInformerContainer">
+        <div id="hodDailyInformerContainer" class="hod-subpanel">
           <div class="hod-filter-row">
             <div class="form-group" style="flex: 1; min-width: 140px; display: none;">
               <label for="hodStreamSelect">Department</label>
@@ -610,12 +611,12 @@
         </div>
 
         <!-- CONTAINER 2: SHORTAGE CALCULATOR -->
-        <div id="hodShortageContainer" style="display: none;">
+        <div id="hodShortageContainer" class="hod-subpanel" style="display: none;">
           <!-- Attendance Shortage Calculator Card (Method 1: Roll Range) -->
           <div class="hod-header-card" style="border: 1px solid rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.05);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-              <h3 style="font-size: 1.05rem; font-weight: 800; color: #f87171; display: flex; align-items: center; gap: 8px; margin: 0;">
-                ⚠️ Attendance Shortage Report Generator
+              <h3 class="hod-panel-title" style="font-size: 1.05rem; font-weight: 800; color: #f87171; display: flex; align-items: center; gap: 8px; margin: 0;">
+                Shortage filters
               </h3>
               <span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #f87171; font-size: 0.72rem; font-weight: 700;">Roll Range Method</span>
             </div>
@@ -699,13 +700,13 @@
           <div id="shortageResultsContainer" style="display: none; margin-top: 14px;"></div>
         </div>
 
-        <div id="hodInternalMarksContainer" style="display: none;">
+        <div id="hodInternalMarksContainer" class="hod-subpanel" style="display: none;">
           <div class="hod-header-card" style="border: 1px solid rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.06);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-              <h3 style="font-size: 1.05rem; font-weight: 800; color: #34d399; margin: 0;">📝 Internal Marks Entry</h3>
-              <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #6ee7b7; font-size: 0.72rem; font-weight: 700;">2 Tests · Max 10 each</span>
+              <h3 class="hod-panel-title" style="font-size: 1.05rem; font-weight: 800; color: #34d399; margin: 0;">Marks entry</h3>
+              <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #6ee7b7; font-size: 0.72rem; font-weight: 700;">2 × 10</span>
             </div>
-            <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0 0 12px;">Uses the logged-in stream, year, section and subject. Attendance logging is unchanged.</p>
+            <p class="hod-panel-hint" style="font-size: 0.78rem; color: var(--text-muted); margin: 0 0 12px;">Logged-in stream · year · section · subject</p>
 
             <div class="hod-filter-row" style="margin-bottom: 8px;">
               <div class="form-group" style="flex: 1; min-width: 110px;">
@@ -1128,8 +1129,8 @@
 
   <datalist id="subjectDatalist"></datalist>
 
-  <script src="parser.js?v=v32.40-stream-pin-lock"></script>
-  <script src="app.js?v=v32.40-stream-pin-lock"></script>
+  <script src="parser.js?v=v32.43-hod-workspace"></script>
+  <script src="app.js?v=v32.43-hod-workspace"></script>
 <!-- Bulk Past Class Generator Modal -->
     <div class="modal-overlay" id="bulkGeneratorModal">
       <div class="modal-card" style="max-width: 460px;">
@@ -1228,15 +1229,8 @@
           <h2>📋 Paste past classes</h2>
           <button class="icon-btn" id="closePaperPasteModalBtn" aria-label="Close modal">&times;</button>
         </div>
-        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; line-height: 1.45;">
-          Use a <strong>header block</strong> for Year · Section · Subject, then one line per class:
-          <strong>Date · Absentee rolls</strong> (or NIL). Year can be <strong>1st</strong>, <strong>I</strong>, <strong>FY</strong>, <strong>1st Year</strong>, <strong>I BCA</strong>, etc.
-          Headers work with spaces on phone: <em>1 C FOC prefix C0</em> — or pipes: <em>1 | C | FOC</em>.
-          Dates can be <strong>1/8</strong>, <strong>1 Aug</strong>, or <strong>2026-08-01</strong>.
-          Slot is optional — uses <strong>Default Slot</strong> (or write <em>Slot 2</em>).
-          Short rolls (<strong>09, 17</strong>) expand with <strong>Default Prefix</strong> or <em>prefix C0</em> on the header.
-          Preview shows the full rolls before Load.
-          Loads through the same Submit path — conflict checks stay unchanged.
+        <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 10px; line-height: 1.4;">
+          Preview before Load. Format is shown in the paste box.
         </p>
         <div class="form-group" style="margin-bottom: 10px;">
           <label for="paperPasteSlot">Default Slot (used when a date line omits Slot)</label>
