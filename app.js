@@ -298,11 +298,33 @@ function authenticateWithServer(deptCode, passcode) {
 
         const pClean = pass.toLowerCase().replace(/[\s\.\-_]/g, '');
 
+        // Full stream PINs only — no short guesses like "bca" / "bcom" / "bsc"
         const validAliases = {
-            BSC: ['bsc2026', 'bsc', 'bsc2027', 'bsc1', 'hodbsc', 'bsc_hod', 'science'],
-            BA:  ['ba2026', 'ba', 'ba2027', 'ba1', 'hodba', 'ba_hod', 'arts'],
-            BCA: ['bca2026', 'bca', 'bca2027', 'bca1', 'hodbca', 'bca_hod'],
-            BCM: ['bcm2026', 'bcom2026', 'bcm', 'bcom', 'bcom2027', 'hodbcm', 'bcm_hod', 'bcom_hod']
+            BSC: ['bsc2026', 'bsc2027', 'hodbsc'],
+            BA:  ['ba2026', 'ba2027', 'hodba'],
+            BCA: ['bca2026', 'bca2027', 'hodbca'],
+            BCM: ['bcm2026', 'bcom2026', 'bcom2027', 'hodbcm']
+        };
+
+        const streamLabels = { BCA: 'BCA', BCM: 'B.Com', BA: 'B.A.', BSC: 'B.Sc.' };
+
+        const pinMatchesStream = (deptKey) => {
+            try {
+                const store = getPasscodeStore();
+                const teacherPass = String((store.teacher && store.teacher[deptKey]) || (DEPT_CONFIG[deptKey] && DEPT_CONFIG[deptKey].passcode) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
+                const hodPass = String((store.hod && store.hod[deptKey]) || ('hod' + deptKey.toLowerCase())).toLowerCase().replace(/[\s\.\-_]/g, '');
+                if (teacherPass && pClean === teacherPass) {
+                    return { ok: true, role: 'TEACHER', stream: deptKey };
+                }
+                if (hodPass && pClean === hodPass) {
+                    return { ok: true, role: 'HOD', stream: deptKey };
+                }
+                if (validAliases[deptKey] && validAliases[deptKey].indexOf(pClean) !== -1) {
+                    const role = pClean.indexOf('hod') !== -1 ? 'HOD' : 'TEACHER';
+                    return { ok: true, role: role, stream: deptKey };
+                }
+            } catch (e) {}
+            return null;
         };
 
         const tryLocalVerification = () => {
@@ -310,38 +332,31 @@ function authenticateWithServer(deptCode, passcode) {
                 const store = getPasscodeStore();
 
                 const adminPass = String(store.ADMIN || 'admin2026').toLowerCase().replace(/[\s\.\-_]/g, '');
-                if (pClean === adminPass || pClean === 'admin' || pClean === 'admin2026') {
+                // Admin only with real admin PIN — not bare "admin"
+                if (pClean === adminPass) {
                     return { ok: true, role: 'ADMIN', stream: stream, offline: true };
                 }
 
-                const teacherPass = String((store.teacher && store.teacher[stream]) || (DEPT_CONFIG[stream] && DEPT_CONFIG[stream].passcode) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
-                const hodPass = String((store.hod && store.hod[stream]) || ('hod' + stream.toLowerCase())).toLowerCase().replace(/[\s\.\-_]/g, '');
-
-                if (teacherPass && pClean === teacherPass) {
-                    return { ok: true, role: 'TEACHER', stream: stream, offline: true };
-                }
-                if (hodPass && pClean === hodPass) {
-                    return { ok: true, role: 'HOD', stream: stream, offline: true };
-                }
-                if (validAliases[stream] && validAliases[stream].indexOf(pClean) !== -1) {
-                    const role = pClean.indexOf('hod') !== -1 ? 'HOD' : 'TEACHER';
-                    return { ok: true, role: role, stream: stream, offline: true };
+                // Selected stream only — wrong stream PIN must fail (old login behaviour)
+                const selectedMatch = pinMatchesStream(stream);
+                if (selectedMatch) {
+                    return Object.assign({}, selectedMatch, { offline: true });
                 }
 
+                // Helpful reject if PIN belongs to another stream
                 const allDepts = ['BSC', 'BA', 'BCA', 'BCM'];
                 for (let i = 0; i < allDepts.length; i++) {
                     const deptKey = allDepts[i];
-                    const dTeacher = String((store.teacher && store.teacher[deptKey]) || (DEPT_CONFIG[deptKey] && DEPT_CONFIG[deptKey].passcode) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
-                    const dHod = String((store.hod && store.hod[deptKey]) || ('hod' + deptKey.toLowerCase())).toLowerCase().replace(/[\s\.\-_]/g, '');
-                    if (dTeacher && pClean === dTeacher) {
-                        return { ok: true, role: 'TEACHER', stream: deptKey, matchedOtherStream: true, offline: true };
-                    }
-                    if (dHod && pClean === dHod) {
-                        return { ok: true, role: 'HOD', stream: deptKey, matchedOtherStream: true, offline: true };
-                    }
-                    if (validAliases[deptKey] && validAliases[deptKey].indexOf(pClean) !== -1) {
-                        const role = pClean.indexOf('hod') !== -1 ? 'HOD' : 'TEACHER';
-                        return { ok: true, role: role, stream: deptKey, matchedOtherStream: true, offline: true };
+                    if (deptKey === stream) continue;
+                    if (pinMatchesStream(deptKey)) {
+                        return {
+                            ok: false,
+                            offline: true,
+                            wrongStream: true,
+                            message: 'PIN is for ' + (streamLabels[deptKey] || deptKey) +
+                                ' — select that stream card, or use the ' +
+                                (streamLabels[stream] || stream) + ' PIN.'
+                        };
                     }
                 }
             } catch (e) {
@@ -393,23 +408,32 @@ function authenticateWithServer(deptCode, passcode) {
         window[cbName] = function (data) {
             clearTimeout(timeout);
             if (data && data.result === 'success') {
+                const role = data.role || 'TEACHER';
+                const serverStream = String(data.stream || stream).toUpperCase().replace('BCOM', 'BCM');
+                // Never auto-switch streams: PIN must match the card selected on login
+                if (role !== 'ADMIN' && (data.matchedOtherStream || serverStream !== stream)) {
+                    settle({
+                        ok: false,
+                        wrongStream: true,
+                        message: 'PIN does not match selected stream. Select the matching stream card.'
+                    });
+                    return;
+                }
                 settle({
                     ok: true,
-                    role: data.role || 'TEACHER',
-                    stream: data.stream || stream,
-                    matchedOtherStream: !!(data.matchedOtherStream ||
-                        (data.stream && String(data.stream).toUpperCase() !== stream))
+                    role: role,
+                    stream: role === 'ADMIN' ? stream : serverStream
                 });
                 return;
             }
-            // Server said no — still allow known local PIN (custom store / defaults)
+            // Server said no — still allow known local PIN for THIS stream only
             if (local.ok) {
                 settle(local);
                 return;
             }
             settle({
                 ok: false,
-                message: (data && data.message) || 'Invalid PIN for this stream.'
+                message: (local && local.message) || (data && data.message) || 'Invalid PIN for this stream.'
             });
         };
 
@@ -5125,11 +5149,8 @@ function initDepartmentManager() {
         try {
             const res = await authenticateWithServer(selectedDept, pass);
             if (res && res.ok) {
-                const loginStream = res.stream || selectedDept;
-                if (res.matchedOtherStream && loginStream !== selectedDept) {
-                    // PIN belongs to another stream — lock session to that stream
-                    selectedDept = loginStream;
-                }
+                // Stay on the stream card the user selected (no auto-switch)
+                const loginStream = selectedDept;
                 syncLocalPasscodeFromLogin(loginStream, res.role || 'TEACHER', pass);
                 finishLoginSuccess(res.role || 'TEACHER', loginStream, pass, remember);
                 return;
