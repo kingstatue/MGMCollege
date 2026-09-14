@@ -285,11 +285,11 @@ function appendAuthToParams(params) {
     return params;
 }
 
-/** Confirm login passcode against Apps Script with instant local verification fallback. */
+/** Confirm login: local PIN first (works offline), then Apps Script when online. Never accept a random PIN. */
 function authenticateWithServer(deptCode, passcode) {
     return new Promise((resolve) => {
         const pass = String(passcode || '').trim();
-        const stream = String(deptCode || currentDept || 'BSC').toUpperCase();
+        const stream = String(deptCode || currentDept || 'BSC').toUpperCase().replace('BCOM', 'BCM');
 
         if (!pass) {
             resolve({ ok: false, offline: false, message: 'Enter the stream PIN' });
@@ -298,7 +298,6 @@ function authenticateWithServer(deptCode, passcode) {
 
         const pClean = pass.toLowerCase().replace(/[\s\.\-_]/g, '');
 
-        // Passcode aliases per stream
         const validAliases = {
             BSC: ['bsc2026', 'bsc', 'bsc2027', 'bsc1', 'hodbsc', 'bsc_hod', 'science'],
             BA:  ['ba2026', 'ba', 'ba2027', 'ba1', 'hodba', 'ba_hod', 'arts'],
@@ -310,52 +309,141 @@ function authenticateWithServer(deptCode, passcode) {
             try {
                 const store = getPasscodeStore();
 
-                // Admin check
                 const adminPass = String(store.ADMIN || 'admin2026').toLowerCase().replace(/[\s\.\-_]/g, '');
                 if (pClean === adminPass || pClean === 'admin' || pClean === 'admin2026') {
                     return { ok: true, role: 'ADMIN', stream: stream, offline: true };
                 }
 
-                // Selected stream custom/default check
                 const teacherPass = String((store.teacher && store.teacher[stream]) || (DEPT_CONFIG[stream] && DEPT_CONFIG[stream].passcode) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
-                const hodPass = String((store.hod && store.hod[stream]) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
+                const hodPass = String((store.hod && store.hod[stream]) || ('hod' + stream.toLowerCase())).toLowerCase().replace(/[\s\.\-_]/g, '');
 
                 if (teacherPass && pClean === teacherPass) {
                     return { ok: true, role: 'TEACHER', stream: stream, offline: true };
                 }
                 if (hodPass && pClean === hodPass) {
-                    return { ok: true, role: 'TEACHER', stream: stream, offline: true };
+                    return { ok: true, role: 'HOD', stream: stream, offline: true };
+                }
+                if (validAliases[stream] && validAliases[stream].indexOf(pClean) !== -1) {
+                    const role = pClean.indexOf('hod') !== -1 ? 'HOD' : 'TEACHER';
+                    return { ok: true, role: role, stream: stream, offline: true };
                 }
 
-                // Stream aliases check for active stream
-                if (validAliases[stream] && validAliases[stream].includes(pClean)) {
-                    return { ok: true, role: 'TEACHER', stream: stream, offline: true };
-                }
-
-                // Check other stream passcodes / aliases (if user selected wrong stream card)
                 const allDepts = ['BSC', 'BA', 'BCA', 'BCM'];
-                for (let deptKey of allDepts) {
+                for (let i = 0; i < allDepts.length; i++) {
+                    const deptKey = allDepts[i];
                     const dTeacher = String((store.teacher && store.teacher[deptKey]) || (DEPT_CONFIG[deptKey] && DEPT_CONFIG[deptKey].passcode) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
-                    const dHod = String((store.hod && store.hod[deptKey]) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
-                    if ((dTeacher && pClean === dTeacher) || (dHod && pClean === dHod) || (validAliases[deptKey] && validAliases[deptKey].includes(pClean))) {
+                    const dHod = String((store.hod && store.hod[deptKey]) || ('hod' + deptKey.toLowerCase())).toLowerCase().replace(/[\s\.\-_]/g, '');
+                    if (dTeacher && pClean === dTeacher) {
                         return { ok: true, role: 'TEACHER', stream: deptKey, matchedOtherStream: true, offline: true };
                     }
-                }
-
-                // Fail-safe: Any non-empty PIN entered for stream grants login
-                if (pass.length > 0) {
-                    return { ok: true, role: 'TEACHER', stream: stream, offline: true };
+                    if (dHod && pClean === dHod) {
+                        return { ok: true, role: 'HOD', stream: deptKey, matchedOtherStream: true, offline: true };
+                    }
+                    if (validAliases[deptKey] && validAliases[deptKey].indexOf(pClean) !== -1) {
+                        const role = pClean.indexOf('hod') !== -1 ? 'HOD' : 'TEACHER';
+                        return { ok: true, role: role, stream: deptKey, matchedOtherStream: true, offline: true };
+                    }
                 }
             } catch (e) {
-                if (pass.length > 0) {
-                    return { ok: true, role: 'TEACHER', stream: stream, offline: true };
-                }
+                console.warn('[Auth] Local PIN check error:', e);
             }
             return { ok: false, offline: true, message: 'Invalid PIN for selected stream.' };
         };
 
-        const result = tryLocalVerification();
-        resolve(result);
+        const local = tryLocalVerification();
+
+        // Offline: only known PINs work
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            resolve(local.ok ? local : {
+                ok: false,
+                offline: true,
+                message: 'Offline — use the correct stream PIN (wrong PIN rejected).'
+            });
+            return;
+        }
+
+        const targetUrl = getWebhookUrl(stream);
+        if (!targetUrl || String(targetUrl).indexOf('YOUR_') !== -1) {
+            resolve(local.ok ? local : {
+                ok: false,
+                message: local.message || 'Invalid PIN for selected stream.'
+            });
+            return;
+        }
+
+        const cbName = 'mgm_login_auth_cb_' + Date.now();
+        let settled = false;
+        const settle = (res) => {
+            if (settled) return;
+            settled = true;
+            try { delete window[cbName]; } catch (e) {}
+            resolve(res);
+        };
+
+        const timeout = setTimeout(() => {
+            // Server slow: accept only if local PIN matched — never any random text
+            if (local.ok) settle(Object.assign({}, local, { offline: false }));
+            else settle({
+                ok: false,
+                slow: true,
+                message: 'Could not verify with server — check PIN and try again.'
+            });
+        }, 8000);
+
+        window[cbName] = function (data) {
+            clearTimeout(timeout);
+            if (data && data.result === 'success') {
+                settle({
+                    ok: true,
+                    role: data.role || 'TEACHER',
+                    stream: data.stream || stream,
+                    matchedOtherStream: !!(data.matchedOtherStream ||
+                        (data.stream && String(data.stream).toUpperCase() !== stream))
+                });
+                return;
+            }
+            // Server said no — still allow known local PIN (custom store / defaults)
+            if (local.ok) {
+                settle(local);
+                return;
+            }
+            settle({
+                ok: false,
+                message: (data && data.message) || 'Invalid PIN for this stream.'
+            });
+        };
+
+        try {
+            const params = new URLSearchParams({
+                action: 'auth',
+                authPasscode: pass,
+                passcode: pass,
+                authStream: stream,
+                stream: stream,
+                callback: cbName
+            });
+            appendAuthToParams(params);
+            // Prefer the typed PIN over whatever appendAuth put (session may be empty/stale)
+            params.set('authPasscode', pass);
+            params.set('passcode', pass);
+
+            const scriptEl = document.createElement('script');
+            scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+            scriptEl.onerror = function () {
+                clearTimeout(timeout);
+                if (local.ok) settle(local);
+                else settle({
+                    ok: false,
+                    offline: true,
+                    message: 'Network error — use the correct stream PIN offline, or try again online.'
+                });
+            };
+            document.body.appendChild(scriptEl);
+        } catch (e) {
+            clearTimeout(timeout);
+            if (local.ok) settle(local);
+            else settle({ ok: false, message: 'Invalid PIN for selected stream.' });
+        }
     });
 }
 
@@ -5064,9 +5152,11 @@ function initDepartmentManager() {
                 }
             }
         } catch (e) {
-            console.error('[Login] Resilience fallback triggered:', e);
-            finishLoginSuccess('TEACHER', selectedDept, pass, remember);
-            return;
+            console.error('[Login] error:', e);
+            if (loginAlertBox) {
+                loginAlertBox.style.display = 'block';
+                loginAlertBox.textContent = 'Login failed — check PIN and try again.';
+            }
         }
         setLoginBusy(false);
         if (deptPasscode) {
