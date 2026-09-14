@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'mgm-absentee-informer';
-const CACHE_NAME = 'mgm-absentee-informer-v107-hard-sync';
+const CACHE_NAME = 'mgm-absentee-informer-v108-sync-lock';
 // Do NOT precache app.js / index / css — mobile was stuck on broken cached JS after updates.
 // Network-first fetch handler still caches them after a successful live load.
 const ASSETS_TO_CACHE = [

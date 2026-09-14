@@ -3220,6 +3220,7 @@ function updateSyncButtonState() {
 }
 
 let isFetchingServerHistory = false;
+let isFetchingFullSheetHistory = false;
 
 function historyMatchKey(item) {
     return entryKey(item) + '|' + String(item.stream || 'BCA').trim().toUpperCase().replace('BCOM', 'BCM');
@@ -3346,16 +3347,36 @@ function fetchTodayServerHistory() {
 function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
     opts = opts || {};
     const quiet = !!opts.quiet;
+    stream = stream || currentDept || 'BCA';
+
+    // Only one full Sync at a time (quiet background + manual clicks were colliding → network error)
+    if (isFetchingFullSheetHistory) {
+        if (!quiet) {
+            showCustomToast('⏳ Sync already running', 'Wait for the current Sync Sheet to finish, then try once.');
+        }
+        return;
+    }
+
     const targetUrl = getWebhookUrl(stream);
-    if (!targetUrl) return;
+    if (!targetUrl) {
+        if (!quiet) showCustomToast('⚠️ Sheet Sync Failed', 'No Google Script URL configured.');
+        return;
+    }
+
+    isFetchingFullSheetHistory = true;
     const syncBtn = document.getElementById('syncSheetHistoryBtn');
     if (syncBtn && !quiet) {
         syncBtn.disabled = true;
         syncBtn.textContent = '🔄 Syncing…';
     }
     const cbName = 'mgm_history_full_cb_' + Date.now();
+    let finished = false;
+    let retried = !!opts._retried;
 
     const finishBtn = () => {
+        if (finished) return;
+        finished = true;
+        isFetchingFullSheetHistory = false;
         if (syncBtn) {
             syncBtn.disabled = false;
             syncBtn.textContent = '🔄 Sync Sheet';
@@ -3366,9 +3387,9 @@ function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
         try { delete window[cbName]; } catch (e) {}
         finishBtn();
         if (!quiet) {
-            showCustomToast('⚠️ Sheet Sync Timed Out', 'Try Sync Sheet again — phone list was not replaced.');
+            showCustomToast('⚠️ Sheet Sync Timed Out', 'College sheet is large — wait 10s and tap Sync Sheet once.');
         }
-    }, 45000);
+    }, 60000);
 
     window[cbName] = function (data) {
         clearTimeout(timeout);
@@ -3412,8 +3433,16 @@ function fetchFullSheetHistory(stream = currentDept || 'BCA', opts) {
         clearTimeout(timeout);
         try { delete window[cbName]; } catch (e) {}
         finishBtn();
+        // One automatic retry for manual Sync (transient Apps Script / network blip)
+        if (!quiet && !retried) {
+            setTimeout(() => {
+                fetchFullSheetHistory(stream, { quiet: false, _retried: true });
+            }, 2500);
+            showCustomToast('🔄 Retrying Sync…', 'First attempt failed — trying once more.');
+            return;
+        }
         if (!quiet) {
-            showCustomToast('⚠️ Sheet Sync Failed', 'Network error — could not load Google Sheet.');
+            showCustomToast('⚠️ Sheet Sync Failed', 'Network error — wait a few seconds and tap Sync Sheet once (not repeatedly).');
         }
         renderHistoryList();
     };
@@ -6749,20 +6778,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.addEventListener('online', () => {
         console.log('[Network] Back online - triggering auto-sync...');
-        syncOfflineEntries().then(() => {
-            fetchTodayServerHistory();
-            setTimeout(() => fetchFullSheetHistory(currentDept || 'BCA', { quiet: true }), 1500);
-        });
+        syncOfflineEntries().then(() => fetchTodayServerHistory());
     });
 
     renderHistoryList();
     if (navigator.onLine) {
         setTimeout(() => {
-            syncOfflineEntries().then(() => {
-                fetchTodayServerHistory();
-                // Quiet full pull so past dates (labs / paste) match Raw Data while app is in use
-                setTimeout(() => fetchFullSheetHistory(currentDept || 'BCA', { quiet: true }), 1800);
-            });
+            // Today-only on open (like before). Full Sync Sheet is manual — avoids colliding
+            // background ALL pulls that caused college "network error" while Allstreams/MGMEC worked.
+            syncOfflineEntries().then(() => fetchTodayServerHistory());
         }, 2000);
     }
 
