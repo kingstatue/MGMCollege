@@ -257,30 +257,9 @@ body {
   display: flex;
   gap: 8px;
   align-items: center;
-  min-width: 0;
-  flex: 1;
+  flex-wrap: wrap;
   justify-content: flex-end;
-}
-
-.header-actions-scroll {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  min-width: 0;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-
-.header-actions-scroll::-webkit-scrollbar {
-  display: none;
-}
-
-.header-actions-fixed {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-shrink: 0;
+  max-width: 100%;
 }
 
 .icon-btn {
@@ -1996,39 +1975,37 @@ body.history-drawer-open #appFrame {
   }
   .header-actions {
     width: 100%;
-    justify-content: space-between;
+    max-width: 100%;
+    justify-content: flex-start;
     gap: 6px;
-  }
-  .header-actions-scroll {
-    flex: 1;
-    gap: 6px;
-    padding-bottom: 2px;
-  }
-  .header-actions-fixed {
-    gap: 6px;
+    flex-wrap: wrap;
   }
   .dept-active-badge {
-    flex: 0 0 auto;
+    flex: 1 1 calc(25% - 6px);
+    min-width: 4.2rem;
     justify-content: center;
-    padding: 6px 8px;
+    padding: 6px 4px;
     font-size: 0.75rem;
     text-align: center;
   }
   .history-pill-btn {
-    flex: 0 0 auto;
+    flex: 1 1 calc(25% - 6px);
+    min-width: 4.2rem;
     justify-content: center;
-    padding: 6px 8px;
-    font-size: 0.75rem;
+    padding: 6px 4px;
+    font-size: 0.72rem;
     gap: 4px;
-    white-space: nowrap;
   }
   .logout-btn {
-    flex: 0 0 auto;
+    flex: 1 1 calc(25% - 6px);
+    min-width: 4.2rem;
     justify-content: center;
-    padding: 6px 8px;
-    font-size: 0.75rem;
+    padding: 6px 4px;
+    font-size: 0.72rem;
     gap: 4px;
-    white-space: nowrap;
+  }
+  .header-actions .icon-btn {
+    flex: 0 0 auto;
   }
 }
 

@@ -7392,7 +7392,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v90_editable_pins';
+    const APP_VER = 'v91_header_fix';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
