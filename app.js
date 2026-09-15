@@ -212,11 +212,17 @@ function getAuthPayload() {
         try { sessionStorage.setItem('mgm_auth_pass', pass); } catch (e) {}
         try { localStorage.setItem('mgm_session_pass', pass); } catch (e) {}
     }
+    let teacherName = '';
+    let teacherId = '';
+    try { teacherName = String(localStorage.getItem('mgm_teacher_name') || '').trim(); } catch (e) {}
+    try { teacherId = String(localStorage.getItem('mgm_teacher_id') || '').trim(); } catch (e) {}
     return {
         authPasscode: pass,
         authRole: localStorage.getItem('mgm_role') || currentRole || 'TEACHER',
         // Prefer the stream the passcode was validated for (fixes sync after dept switch / wrong card)
-        authStream: localStorage.getItem('mgm_auth_stream') || currentDept || 'BCA'
+        authStream: localStorage.getItem('mgm_auth_stream') || currentDept || 'BCA',
+        teacherName: teacherName,
+        teacherId: teacherId
     };
 }
 
@@ -484,7 +490,16 @@ function authenticateWithServer(deptCode, passcode) {
         };
 
         const timeout = setTimeout(() => {
-            // Server slow: accept only if local PIN matched — never any random text
+            // Personal teacher PINs must wait for server — never resurrect a removed PIN from cache
+            if (local.ok && local.personalPin) {
+                settle({
+                    ok: false,
+                    slow: true,
+                    message: 'Could not verify teacher PIN with server — try again online.'
+                });
+                return;
+            }
+            // Legacy stream / admin: accept only if local PIN matched — never any random text
             if (local.ok) settle(Object.assign({}, local, { offline: false }));
             else settle({
                 ok: false,
@@ -541,6 +556,23 @@ function authenticateWithServer(deptCode, passcode) {
                 settle(Object.assign({}, local, { serverUnsynced: true }));
                 return;
             }
+            // Personal teacher PINs: server is source of truth when online.
+            // Never keep a deleted/disabled PIN alive via phone cache.
+            if (local.ok && local.personalPin) {
+                try {
+                    const want = String(pass || '').trim().toLowerCase().replace(/[\s\.\-_]/g, '');
+                    saveCachedTeachers(loadCachedTeachers().filter((t) => {
+                        const pin = String(t.pin || '').trim().toLowerCase().replace(/[\s\.\-_]/g, '');
+                        return pin !== want;
+                    }));
+                } catch (ePurge) {}
+                settle({
+                    ok: false,
+                    message: (data && data.message) || 'Teacher PIN was removed or disabled. Ask admin to add again.'
+                });
+                return;
+            }
+            // Legacy stream PIN may still match local store when server is briefly out of sync
             if (local.ok) {
                 settle(local);
                 return;
@@ -569,6 +601,14 @@ function authenticateWithServer(deptCode, passcode) {
             scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
             scriptEl.onerror = function () {
                 clearTimeout(timeout);
+                if (local.ok && local.personalPin && navigator.onLine !== false) {
+                    settle({
+                        ok: false,
+                        offline: false,
+                        message: 'Could not reach server to verify teacher PIN — try again.'
+                    });
+                    return;
+                }
                 if (local.ok) settle(local);
                 else settle({
                     ok: false,
@@ -579,7 +619,9 @@ function authenticateWithServer(deptCode, passcode) {
             document.body.appendChild(scriptEl);
         } catch (e) {
             clearTimeout(timeout);
-            if (local.ok) settle(local);
+            if (local.ok && local.personalPin && navigator.onLine !== false) {
+                settle({ ok: false, message: 'Could not verify teacher PIN — try again.' });
+            } else if (local.ok) settle(local);
             else settle({ ok: false, message: 'Invalid PIN for selected stream.' });
         }
     });
@@ -2887,6 +2929,7 @@ async function deleteData(dateVal, yearVal, sectionVal, subjectVal, slotVal, str
 
     const prevRolls = targetItem ? normalizeRollNumbers(targetItem.rollNumbers) : [];
     const prevStr = prevRolls.length > 0 ? prevRolls.join(', ') : 'NIL';
+    const removedSnapshot = targetItem ? Object.assign({}, targetItem) : null;
 
     const updatedHistory = history.filter(item => 
         !((item.stream || 'BCA') === cleanStream &&
@@ -2899,7 +2942,7 @@ async function deleteData(dateVal, yearVal, sectionVal, subjectVal, slotVal, str
     saveHistoryToLocalStorage(updatedHistory);
     renderHistoryList();
 
-    const payload = {
+    const payload = withAuth({
         action: 'delete',
         stream: cleanStream,
         date: cleanDate,
@@ -2911,11 +2954,10 @@ async function deleteData(dateVal, yearVal, sectionVal, subjectVal, slotVal, str
         previousRollNumbers: prevStr,
         deletedRollNumbers: prevStr,
         changesSummary: `Deleted Raw Data row (section formulas refresh; was: ${prevStr})`
-    };
+    });
 
     console.log('Sending Delete Payload:', payload);
 
-    // Remove locally + toast immediately; sheet delete continues in background
     closeConfirmationModal();
     resetAllInputs();
 
@@ -2923,41 +2965,127 @@ async function deleteData(dateVal, yearVal, sectionVal, subjectVal, slotVal, str
     const toastTitleElem = document.querySelector('#successToast .toast-text');
     const toastSubtextElem = document.getElementById('toastSubtext');
     const successToastElem = ensureToastOnBody(document.getElementById('successToast'));
-    if (toastTitleElem) {
-        toastTitleElem.textContent = networkOff ? 'Removed on phone (offline)' : 'Deleted from Sheets';
-    }
-    if (toastSubtextElem) {
-        toastSubtextElem.textContent = networkOff
-            ? `Cleared from this phone (${cleanDate}, Slot ${cleanSlot}) — check Raw Data when back online`
-            : `Raw Data (${cleanStream}) deleted — section formulas will clear (${cleanDate}, Slot ${cleanSlot})`;
-    }
-    if (successToastElem) {
-        successToastElem.style.display = 'flex';
-        successToastElem.style.opacity = '1';
-        successToastElem.style.visibility = 'visible';
-        successToastElem.style.zIndex = '2147483646';
-        successToastElem.classList.add('active');
-        setTimeout(() => {
-            successToastElem.style.opacity = '0';
+    const showDeleteToast = (title, sub) => {
+        if (toastTitleElem) toastTitleElem.textContent = title;
+        if (toastSubtextElem) toastSubtextElem.textContent = sub;
+        if (successToastElem) {
+            successToastElem.style.display = 'flex';
+            successToastElem.style.opacity = '1';
+            successToastElem.style.visibility = 'visible';
+            successToastElem.style.zIndex = '2147483646';
+            successToastElem.classList.add('active');
             setTimeout(() => {
-                successToastElem.classList.remove('active');
-                successToastElem.style.display = 'none';
-            }, 300);
-        }, 2800);
+                successToastElem.style.opacity = '0';
+                setTimeout(() => {
+                    successToastElem.classList.remove('active');
+                    successToastElem.style.display = 'none';
+                }, 300);
+            }, 2800);
+        }
+    };
+
+    if (networkOff) {
+        showDeleteToast(
+            'Removed on phone (offline)',
+            `Cleared from this phone (${cleanDate}, Slot ${cleanSlot}) — delete from Raw Data when back online`
+        );
+        return;
     }
 
+    showDeleteToast('Deleting from Sheets…', `Raw Data (${cleanStream}) — confirming delete…`);
+
     const targetUrl = getWebhookUrl(cleanStream);
-    if (targetUrl && !networkOff) {
-        postWithRetry(targetUrl, withAuth(payload), 2).catch((e) => {
-            console.error('Error sending delete request:', e);
-            if (typeof showCustomToast === 'function') {
-                showCustomToast(
-                    'Removed on phone',
-                    'Could not confirm Google Sheet delete — check Raw Data manually if needed.'
+    if (!targetUrl) {
+        showDeleteToast('Removed on phone', 'No sheet URL — check Raw Data manually.');
+        return;
+    }
+
+    const restoreLocal = () => {
+        if (!removedSnapshot) return;
+        try {
+            const cur = readAllHistory();
+            const exists = cur.some(item =>
+                (item.stream || 'BCA') === cleanStream &&
+                normalizeHistoryDate(item.date) === normalizeHistoryDate(cleanDate) &&
+                String(item.year || '').trim() === String(cleanYear).trim() &&
+                normalizeSectionCode(item.section) === normalizeSectionCode(cleanSection) &&
+                String(item.subject || '').trim().toLowerCase() === cleanSubject.toLowerCase() &&
+                (parseInt(item.slot, 10) || 1) === cleanSlot
+            );
+            if (!exists) {
+                cur.push(removedSnapshot);
+                saveHistoryToLocalStorage(cur);
+                renderHistoryList();
+            }
+        } catch (eRest) {}
+    };
+
+    // JSONP delete so we get a real success/fail (no-cors POST cannot confirm)
+    await new Promise((resolve) => {
+        const cbName = 'mgmDeleteCb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+        let settled = false;
+        const finish = (ok, msg) => {
+            if (settled) return;
+            settled = true;
+            try { delete window[cbName]; } catch (e) {}
+            if (ok) {
+                showDeleteToast(
+                    'Deleted from Sheets',
+                    `Raw Data (${cleanStream}) deleted — section formulas will clear (${cleanDate}, Slot ${cleanSlot})`
+                );
+            } else {
+                restoreLocal();
+                showDeleteToast(
+                    'Sheet delete failed',
+                    msg || 'Restored on this phone — check Raw Data / try again online.'
                 );
             }
-        });
-    }
+            resolve(ok);
+        };
+        const timer = setTimeout(() => finish(false, 'Delete timed out — entry restored on phone.'), 18000);
+        window[cbName] = function (data) {
+            clearTimeout(timer);
+            if (data && data.result === 'success') {
+                // Verify row is gone
+                checkSheetSlotConflict(cleanDate, cleanYear, cleanSection, cleanSlot, cleanSubject)
+                    .then((check) => {
+                        if (check && check.exists && !check.offline) {
+                            finish(false, 'Row still on Raw Data — delete did not stick.');
+                        } else {
+                            finish(true);
+                        }
+                    })
+                    .catch(() => finish(true));
+                return;
+            }
+            finish(false, (data && (data.message || data.error)) || 'Server rejected delete.');
+        };
+        try {
+            const params = new URLSearchParams();
+            Object.keys(payload).forEach((k) => {
+                if (payload[k] !== undefined && payload[k] !== null) params.set(k, String(payload[k]));
+            });
+            params.set('action', 'delete');
+            params.set('callback', cbName);
+            const scriptEl = document.createElement('script');
+            scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+            scriptEl.onerror = function () {
+                clearTimeout(timer);
+                // Fallback POST, then verify
+                postWithRetry(targetUrl, payload, 2)
+                    .then(() => checkSheetSlotConflict(cleanDate, cleanYear, cleanSection, cleanSlot, cleanSubject))
+                    .then((check) => {
+                        if (check && check.exists && !check.offline) finish(false, 'Row still on Raw Data.');
+                        else finish(true);
+                    })
+                    .catch(() => finish(false, 'Could not reach Google Sheets.'));
+            };
+            document.body.appendChild(scriptEl);
+        } catch (e) {
+            clearTimeout(timer);
+            finish(false, 'Could not start delete request.');
+        }
+    });
 }
 
 function deleteHistoryEntry(index, sourceList) {
@@ -3274,6 +3402,11 @@ function mergeServerHistoryEntry(sEntry, prev) {
         }
     }
     sEntry.timestamp = resolveHistoryTimestamp(sEntry.timestamp, prev);
+    // Keep phone-side actor labels when sheet row is older / missing columns
+    if (prev) {
+        if (prev.submittedBy && !sEntry.submittedBy) sEntry.submittedBy = prev.submittedBy;
+        if (prev.editedBy && !sEntry.editedBy) sEntry.editedBy = prev.editedBy;
+    }
     return sEntry;
 }
 
@@ -8441,10 +8574,12 @@ function initTeachersManager() {
                 });
             }
             teachers = teachers.filter(t => t && String(t.name || '').trim());
-            cacheTeachersForStream(teachers);
+            // Do NOT write phone cache until server confirms — otherwise removed PINs
+            // stay login-able from cache while the modal looks empty / fluctuates.
 
             const targetUrl = getWebhookUrl(stream);
             if (!targetUrl || String(targetUrl).indexOf('YOUR_') !== -1) {
+                cacheTeachersForStream(teachers);
                 setStatus('Saved on this phone only (no sheet URL).');
                 return;
             }
@@ -8465,11 +8600,46 @@ function initTeachersManager() {
                 if (saveBtn) saveBtn.disabled = false;
             };
 
+            const applySavedTeachers = (list) => {
+                teachers = (Array.isArray(list) ? list : []).map((t) => Object.assign({}, t, { stream: stream }));
+                cacheTeachersForStream(teachers);
+                // If a remembered personal PIN was removed, drop it so auto-login cannot revive it
+                try {
+                    const remembered = String(
+                        localStorage.getItem('mgm_remember_pass') ||
+                        localStorage.getItem('mgm_session_pass') || ''
+                    ).trim();
+                    if (remembered) {
+                        const stillTeacher = !!findCachedTeacherByPin(remembered, null);
+                        if (!stillTeacher) {
+                            const store = getPasscodeStore();
+                            const pClean = remembered.toLowerCase().replace(/[\s\.\-_]/g, '');
+                            const adminClean = String(store.ADMIN || 'admin2026').toLowerCase().replace(/[\s\.\-_]/g, '');
+                            let isLegacyStream = (pClean === adminClean);
+                            ['BCA', 'BCM', 'BA', 'BSC'].forEach((d) => {
+                                const tp = String((store.teacher && store.teacher[d]) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
+                                const hp = String((store.hod && store.hod[d]) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
+                                if (pClean && (pClean === tp || pClean === hp)) isLegacyStream = true;
+                            });
+                            if (!isLegacyStream) {
+                                try { localStorage.removeItem('mgm_remember_pass'); } catch (eR) {}
+                                try { localStorage.removeItem('mgm_session_pass'); } catch (eS) {}
+                                try { sessionStorage.removeItem('mgm_auth_pass'); } catch (eA) {}
+                                try { localStorage.removeItem('mgm_teacher_name'); } catch (eN) {}
+                                try { localStorage.removeItem('mgm_teacher_id'); } catch (eI) {}
+                            }
+                        }
+                    }
+                } catch (eMem) {}
+                renderTeachers();
+            };
+
             const attemptSave = (pinIdx, round) => {
                 if (pinIdx >= tryAuthPins.length) {
                     finishSaveUi();
                     setStatus('Could not reach server on first pass — tap Save to Server again.');
                     showCustomToast('Try Save once more', 'First save can be slow after deploy. Tap Save to Server again.');
+                    fetchTeachersFromServer();
                     return;
                 }
                 const pin = tryAuthPins[pinIdx];
@@ -8492,13 +8662,19 @@ function initTeachersManager() {
                     settled = true;
                     clearTimeout(timer);
                     try { delete window[cbName]; } catch (e) {}
-                    if (data && data.result === 'success' && Array.isArray(data.teachers)) {
-                        teachers = data.teachers.map((t) => Object.assign({}, t, { stream: stream }));
-                        cacheTeachersForStream(teachers);
-                        renderTeachers();
+                    if (data && data.result === 'success') {
+                        applySavedTeachers(Array.isArray(data.teachers) ? data.teachers : []);
                         finishSaveUi();
-                        setStatus('Saved ' + streamNice(stream) + ' teachers on server.');
-                        showCustomToast('Teachers saved', streamNice(stream) + ' personal PINs are live on the server.');
+                        const n = teachers.length;
+                        setStatus(n
+                            ? ('Saved ' + n + ' teacher(s) for ' + streamNice(stream) + ' on server.')
+                            : ('Cleared all ' + streamNice(stream) + ' teachers on server.'));
+                        showCustomToast(
+                            n ? 'Teachers saved' : 'Teachers cleared',
+                            n
+                                ? (streamNice(stream) + ' personal PINs are live on the server.')
+                                : ('Removed ' + streamNice(stream) + ' personal PINs — they can no longer log in.')
+                        );
                         return;
                     }
                     const msg = (data && data.message) ? String(data.message) : '';
@@ -8513,6 +8689,7 @@ function initTeachersManager() {
                     finishSaveUi();
                     setStatus(msg || 'Save failed — tap Save to Server again.');
                     showCustomToast('Teachers save failed', msg || 'Tap Save to Server once more.');
+                    fetchTeachersFromServer();
                 };
                 const params = new URLSearchParams();
                 params.set('action', 'save_teachers');
