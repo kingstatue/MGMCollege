@@ -5228,7 +5228,7 @@ function initDepartmentManager() {
                     setTimeout(() => {
                         showCustomToast(
                             'Set up personal teacher PINs',
-                            'Tap Teachers in the header — add each teacher name and Generate PIN. Stream PINs still work during transition.'
+                            'Tap Teachers in the header — add each teacher and set a memorable PIN. Stream PINs still work during transition.'
                         );
                     }, 600);
                 }
@@ -7392,7 +7392,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v89_personal_pins';
+    const APP_VER = 'v90_editable_pins';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
@@ -8240,7 +8240,7 @@ function initTeachersManager() {
     const renderTeachers = () => {
         if (!listEl) return;
         if (!teachers.length) {
-            listEl.innerHTML = '<p style="font-size: 0.8rem; color: var(--text-muted);">No teachers yet. Add a name and tap Generate PIN.</p>';
+            listEl.innerHTML = '<p style="font-size: 0.8rem; color: var(--text-muted);">No teachers yet. Add a name, set an easy-to-remember PIN, then Save.</p>';
             return;
         }
         listEl.innerHTML = teachers.map((t, idx) => {
@@ -8248,8 +8248,8 @@ function initTeachersManager() {
             return (
                 '<div class="teacher-row" data-idx="' + idx + '" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; padding:10px; border:1px solid rgba(148,163,184,0.25); border-radius:10px;">' +
                     '<input type="text" class="form-input teacher-name" value="' + escapeHTML(String(t.name || '')) + '" style="flex:1; min-width:120px;" />' +
-                    '<input type="text" class="form-input teacher-pin" value="' + escapeHTML(String(t.pin || '')) + '" style="width:110px; font-family:monospace;" readonly />' +
-                    '<button type="button" class="btn-secondary teacher-regen" style="padding:8px 10px; font-size:0.75rem;">New PIN</button>' +
+                    '<input type="text" class="form-input teacher-pin" value="' + escapeHTML(String(t.pin || '')) + '" placeholder="PIN" style="width:120px; font-family:monospace;" autocomplete="off" spellcheck="false" />' +
+                    '<button type="button" class="btn-secondary teacher-regen" style="padding:8px 10px; font-size:0.75rem;">Random</button>' +
                     '<label style="font-size:0.75rem; display:flex; align-items:center; gap:4px;"><input type="checkbox" class="teacher-disabled" ' + (disabled ? 'checked' : '') + '> Off</label>' +
                     '<button type="button" class="btn-secondary teacher-remove" style="padding:8px 10px; font-size:0.75rem; color:#f87171;">Remove</button>' +
                 '</div>'
@@ -8262,6 +8262,8 @@ function initTeachersManager() {
             const pinEl = row.querySelector('.teacher-pin');
             const disEl = row.querySelector('.teacher-disabled');
             if (nameEl) nameEl.addEventListener('change', () => { teachers[idx].name = nameEl.value.trim(); });
+            if (pinEl) pinEl.addEventListener('change', () => { teachers[idx].pin = pinEl.value.trim(); });
+            if (pinEl) pinEl.addEventListener('input', () => { teachers[idx].pin = pinEl.value.trim(); });
             if (disEl) disEl.addEventListener('change', () => { teachers[idx].disabled = !!disEl.checked; });
             const regen = row.querySelector('.teacher-regen');
             if (regen) regen.addEventListener('click', () => {

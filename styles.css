@@ -257,6 +257,30 @@ body {
   display: flex;
   gap: 8px;
   align-items: center;
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.header-actions-scroll {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.header-actions-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.header-actions-fixed {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .icon-btn {
@@ -1975,26 +1999,36 @@ body.history-drawer-open #appFrame {
     justify-content: space-between;
     gap: 6px;
   }
-  .dept-active-badge {
+  .header-actions-scroll {
     flex: 1;
+    gap: 6px;
+    padding-bottom: 2px;
+  }
+  .header-actions-fixed {
+    gap: 6px;
+  }
+  .dept-active-badge {
+    flex: 0 0 auto;
     justify-content: center;
-    padding: 6px 4px;
+    padding: 6px 8px;
     font-size: 0.75rem;
     text-align: center;
   }
   .history-pill-btn {
-    flex: 1.2;
+    flex: 0 0 auto;
     justify-content: center;
-    padding: 6px 4px;
+    padding: 6px 8px;
     font-size: 0.75rem;
     gap: 4px;
+    white-space: nowrap;
   }
   .logout-btn {
-    flex: 1;
+    flex: 0 0 auto;
     justify-content: center;
-    padding: 6px 4px;
+    padding: 6px 8px;
     font-size: 0.75rem;
     gap: 4px;
+    white-space: nowrap;
   }
 }
 
