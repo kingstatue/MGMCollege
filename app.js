@@ -327,10 +327,15 @@ function restoreAuthSessionFromRemember() {
     } catch (e) {}
 }
 
-/** Keep local offline fallback in sync after a successful server login. */
-function syncLocalPasscodeFromLogin(deptCode, role, passcode) {
+/** Keep local offline fallback in sync after a successful server login.
+ *  Never write personal teacher PINs into the stream teacher slot — that lets
+ *  removed personal PINs keep working as a fake "stream PIN" on this phone.
+ */
+function syncLocalPasscodeFromLogin(deptCode, role, passcode, opts) {
     const pass = (passcode || '').trim();
     if (!pass || !deptCode) return;
+    const personalPin = !!(opts && opts.personalPin);
+    if (personalPin) return;
     try {
         const raw = JSON.parse(localStorage.getItem('mgm_custom_passcodes') || '{}');
         if (role === 'ADMIN') {
@@ -341,6 +346,25 @@ function syncLocalPasscodeFromLogin(deptCode, role, passcode) {
             raw['teacher' + deptCode] = pass;
         }
         localStorage.setItem('mgm_custom_passcodes', JSON.stringify(raw));
+    } catch (e) {}
+}
+
+/** Remove a PIN from local stream-pass store if it was wrongly saved as teacher{STREAM}. */
+function purgePinFromLocalPasscodeStore(passcode) {
+    const want = String(passcode || '').trim().toLowerCase().replace(/[\s\.\-_]/g, '');
+    if (!want) return;
+    try {
+        const raw = JSON.parse(localStorage.getItem('mgm_custom_passcodes') || '{}');
+        let changed = false;
+        Object.keys(raw).forEach((k) => {
+            if (k === 'ADMIN') return;
+            const v = String(raw[k] || '').trim().toLowerCase().replace(/[\s\.\-_]/g, '');
+            if (v && v === want) {
+                delete raw[k];
+                changed = true;
+            }
+        });
+        if (changed) localStorage.setItem('mgm_custom_passcodes', JSON.stringify(raw));
     } catch (e) {}
 }
 
@@ -566,14 +590,37 @@ function authenticateWithServer(deptCode, passcode) {
                         return pin !== want;
                     }));
                 } catch (ePurge) {}
+                purgePinFromLocalPasscodeStore(pass);
                 settle({
                     ok: false,
                     message: (data && data.message) || 'Teacher PIN was removed or disabled. Ask admin to add again.'
                 });
                 return;
             }
-            // Legacy stream PIN may still match local store when server is briefly out of sync
+            // Legacy stream / HOD PIN may still match local store when server is briefly out of sync.
+            // But a personal PIN that was wrongly saved into teacher{STREAM} must not keep working.
             if (local.ok) {
+                if (local.role === 'TEACHER' && !local.personalPin) {
+                    const aliases = {
+                        BSC: ['bsc2026', 'bsc2027', 'hodbsc'],
+                        BA: ['ba2026', 'ba2027', 'hodba'],
+                        BCA: ['bca2026', 'bca2027', 'hodbca'],
+                        BCM: ['bcm2026', 'bcom2026', 'bcom2027', 'hodbcm']
+                    };
+                    const pClean = String(pass || '').trim().toLowerCase().replace(/[\s\.\-_]/g, '');
+                    const cfgPass = String((DEPT_CONFIG[stream] && DEPT_CONFIG[stream].passcode) || '')
+                        .toLowerCase().replace(/[\s\.\-_]/g, '');
+                    const known = (aliases[stream] || []).indexOf(pClean) !== -1 ||
+                        (cfgPass && pClean === cfgPass);
+                    if (!known) {
+                        purgePinFromLocalPasscodeStore(pass);
+                        settle({
+                            ok: false,
+                            message: (data && data.message) || 'Teacher PIN was removed or disabled. Ask admin to add again.'
+                        });
+                        return;
+                    }
+                }
                 settle(local);
                 return;
             }
@@ -5426,7 +5473,9 @@ function initDepartmentManager() {
             if (res && res.ok) {
                 // Stay on the stream card the user selected (no auto-switch)
                 const loginStream = selectedDept;
-                syncLocalPasscodeFromLogin(loginStream, res.role || 'TEACHER', pass);
+                syncLocalPasscodeFromLogin(loginStream, res.role || 'TEACHER', pass, {
+                    personalPin: !!res.personalPin
+                });
                 finishLoginSuccess(res.role || 'TEACHER', loginStream, pass, remember, {
                     teacherName: res.teacherName || '',
                     teacherId: res.teacherId || ''
@@ -5551,7 +5600,9 @@ function initDepartmentManager() {
         if (navigator.onLine && rememberedPass && rememberedPass !== 'BYPASS') {
             authenticateWithServer(savedDept, rememberedPass).then((res) => {
                 if (res && res.ok) {
-                    syncLocalPasscodeFromLogin(savedDept, res.role || currentRole, rememberedPass);
+                    syncLocalPasscodeFromLogin(savedDept, res.role || currentRole, rememberedPass, {
+                        personalPin: !!(res.personalPin || res.teacherId)
+                    });
                     if (res.role) {
                         currentRole = res.role === 'HOD' ? 'TEACHER' : res.role;
                         localStorage.setItem('mgm_role', currentRole);
@@ -8406,6 +8457,8 @@ function initTeachersManager() {
     const streamLabelEl = document.getElementById('teachersStreamLabel');
 
     let teachers = [];
+    let teachersListGen = 0;
+    let teachersSaveGen = 0;
 
     const activeStream = () => String(currentDept || localStorage.getItem('mgm_dept') || 'BCA').toUpperCase().replace('BCOM', 'BCM');
     const streamNice = (s) => (s === 'BCM' ? 'B.Com' : (s === 'BA' ? 'B.A.' : (s === 'BSC' ? 'B.Sc.' : s)));
@@ -8418,14 +8471,22 @@ function initTeachersManager() {
         if (streamLabelEl) streamLabelEl.textContent = streamNice(activeStream());
     };
 
-    const cacheTeachersForStream = (streamTeachers) => {
-        const stream = activeStream();
+    const cacheTeachersForStream = (streamTeachers, streamOverride) => {
+        const stream = String(streamOverride || activeStream()).toUpperCase().replace('BCOM', 'BCM');
         const stamped = (streamTeachers || []).map((t) => Object.assign({}, t, { stream: stream }));
         const others = loadCachedTeachers().filter((t) => {
             const ts = String(t.stream || 'BCA').toUpperCase().replace('BCOM', 'BCM') || 'BCA';
             return ts !== stream;
         });
         saveCachedTeachers(others.concat(stamped));
+    };
+
+    const teachersFromCacheFor = (stream) => {
+        const s = String(stream || activeStream()).toUpperCase().replace('BCOM', 'BCM');
+        return loadCachedTeachers().filter((t) => {
+            const ts = String(t.stream || 'BCA').toUpperCase().replace('BCOM', 'BCM') || 'BCA';
+            return ts === s;
+        });
     };
 
     const renderTeachers = () => {
@@ -8476,31 +8537,29 @@ function initTeachersManager() {
 
     const fetchTeachersFromServer = () => {
         const stream = activeStream();
+        const reqId = ++teachersListGen;
         syncStreamLabel();
+        // Show only this stream immediately — never flash the previous stream's rows
+        teachers = teachersFromCacheFor(stream);
+        renderTeachers();
+
         const targetUrl = getWebhookUrl(stream);
         if (!targetUrl || String(targetUrl).indexOf('YOUR_') !== -1) {
-            teachers = loadCachedTeachers().filter((t) => {
-                const ts = String(t.stream || 'BCA').toUpperCase().replace('BCOM', 'BCM') || 'BCA';
-                return ts === stream;
-            });
-            renderTeachers();
             setStatus('Offline cache — ' + streamNice(stream) + ' teachers.');
             return;
         }
         setStatus('Loading ' + streamNice(stream) + ' teachers…');
-        const cbName = 'mgmTeachersList_' + Date.now();
+        const cbName = 'mgmTeachersList_' + Date.now() + '_' + reqId;
         window[cbName] = function (data) {
             try { delete window[cbName]; } catch (e) {}
+            if (reqId !== teachersListGen || activeStream() !== stream) return;
             if (data && data.result === 'success' && Array.isArray(data.teachers)) {
                 teachers = data.teachers.map((t) => Object.assign({}, t, { stream: stream }));
-                cacheTeachersForStream(teachers);
+                cacheTeachersForStream(teachers, stream);
                 renderTeachers();
                 setStatus(teachers.length + ' teacher(s) for ' + streamNice(stream) + '.');
             } else {
-                teachers = loadCachedTeachers().filter((t) => {
-                    const ts = String(t.stream || 'BCA').toUpperCase().replace('BCOM', 'BCM') || 'BCA';
-                    return ts === stream;
-                });
+                teachers = teachersFromCacheFor(stream);
                 renderTeachers();
                 setStatus((data && data.message) || 'Could not load teachers — showing cache.');
             }
@@ -8515,10 +8574,8 @@ function initTeachersManager() {
         const scriptEl = document.createElement('script');
         scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
         scriptEl.onerror = function () {
-            teachers = loadCachedTeachers().filter((t) => {
-                const ts = String(t.stream || 'BCA').toUpperCase().replace('BCOM', 'BCM') || 'BCA';
-                return ts === stream;
-            });
+            if (reqId !== teachersListGen || activeStream() !== stream) return;
+            teachers = teachersFromCacheFor(stream);
             renderTeachers();
             setStatus('Network error — showing cached teachers.');
         };
@@ -8531,12 +8588,26 @@ function initTeachersManager() {
             showCustomToast('Admin only', 'Manage Teachers requires Super Admin login.');
             return;
         }
+        teachers = [];
+        renderTeachers();
         if (modal) modal.classList.add('active');
         fetchTeachersFromServer();
     };
 
     if (openBtn) openBtn.addEventListener('click', openModal);
     if (closeBtn && modal) closeBtn.addEventListener('click', () => modal.classList.remove('active'));
+
+    // If admin switches stream while modal is open, reload that stream's teachers only
+    document.querySelectorAll('.dept-card').forEach((card) => {
+        card.addEventListener('click', () => {
+            if (!modal || !modal.classList.contains('active')) return;
+            setTimeout(() => {
+                if (currentRole === 'ADMIN' && modal.classList.contains('active')) {
+                    fetchTeachersFromServer();
+                }
+            }, 0);
+        });
+    });
 
     if (addBtn) {
         addBtn.addEventListener('click', () => {
@@ -8576,10 +8647,13 @@ function initTeachersManager() {
             teachers = teachers.filter(t => t && String(t.name || '').trim());
             // Do NOT write phone cache until server confirms — otherwise removed PINs
             // stay login-able from cache while the modal looks empty / fluctuates.
+            const prevStreamTeachers = teachersFromCacheFor(stream);
+            const saveGen = ++teachersSaveGen;
+            const saveAt = String(Date.now());
 
             const targetUrl = getWebhookUrl(stream);
             if (!targetUrl || String(targetUrl).indexOf('YOUR_') !== -1) {
-                cacheTeachersForStream(teachers);
+                cacheTeachersForStream(teachers, stream);
                 setStatus('Saved on this phone only (no sheet URL).');
                 return;
             }
@@ -8601,8 +8675,20 @@ function initTeachersManager() {
             };
 
             const applySavedTeachers = (list) => {
+                const livePins = {};
+                (Array.isArray(list) ? list : []).forEach((t) => {
+                    const p = String(t.pin || '').trim().toLowerCase().replace(/[\s\.\-_]/g, '');
+                    if (p) livePins[p] = true;
+                });
+                // Purge removed personal PINs from teachers cache AND poisoned stream-pass store
+                prevStreamTeachers.forEach((t) => {
+                    const p = String(t.pin || '').trim();
+                    const pClean = p.toLowerCase().replace(/[\s\.\-_]/g, '');
+                    if (pClean && !livePins[pClean]) purgePinFromLocalPasscodeStore(p);
+                });
+
                 teachers = (Array.isArray(list) ? list : []).map((t) => Object.assign({}, t, { stream: stream }));
-                cacheTeachersForStream(teachers);
+                cacheTeachersForStream(teachers, stream);
                 // If a remembered personal PIN was removed, drop it so auto-login cannot revive it
                 try {
                     const remembered = String(
@@ -8612,15 +8698,22 @@ function initTeachersManager() {
                     if (remembered) {
                         const stillTeacher = !!findCachedTeacherByPin(remembered, null);
                         if (!stillTeacher) {
-                            const store = getPasscodeStore();
+                            purgePinFromLocalPasscodeStore(remembered);
                             const pClean = remembered.toLowerCase().replace(/[\s\.\-_]/g, '');
-                            const adminClean = String(store.ADMIN || 'admin2026').toLowerCase().replace(/[\s\.\-_]/g, '');
-                            let isLegacyStream = (pClean === adminClean);
-                            ['BCA', 'BCM', 'BA', 'BSC'].forEach((d) => {
-                                const tp = String((store.teacher && store.teacher[d]) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
-                                const hp = String((store.hod && store.hod[d]) || '').toLowerCase().replace(/[\s\.\-_]/g, '');
-                                if (pClean && (pClean === tp || pClean === hp)) isLegacyStream = true;
+                            const aliases = {
+                                BSC: ['bsc2026', 'bsc2027', 'hodbsc'],
+                                BA: ['ba2026', 'ba2027', 'hodba'],
+                                BCA: ['bca2026', 'bca2027', 'hodbca'],
+                                BCM: ['bcm2026', 'bcom2026', 'bcom2027', 'hodbcm']
+                            };
+                            let isLegacyStream = (pClean === 'admin2026' || pClean === 'admin');
+                            Object.keys(aliases).forEach((d) => {
+                                if (aliases[d].indexOf(pClean) !== -1) isLegacyStream = true;
                             });
+                            const cfg = DEPT_CONFIG[stream];
+                            if (cfg && String(cfg.passcode || '').toLowerCase().replace(/[\s\.\-_]/g, '') === pClean) {
+                                isLegacyStream = true;
+                            }
                             if (!isLegacyStream) {
                                 try { localStorage.removeItem('mgm_remember_pass'); } catch (eR) {}
                                 try { localStorage.removeItem('mgm_session_pass'); } catch (eS) {}
@@ -8635,6 +8728,7 @@ function initTeachersManager() {
             };
 
             const attemptSave = (pinIdx, round) => {
+                if (saveGen !== teachersSaveGen) return;
                 if (pinIdx >= tryAuthPins.length) {
                     finishSaveUi();
                     setStatus('Could not reach server on first pass — tap Save to Server again.');
@@ -8654,6 +8748,7 @@ function initTeachersManager() {
                     if (settled) return;
                     settled = true;
                     try { delete window[cbName]; } catch (e) {}
+                    if (saveGen !== teachersSaveGen) return;
                     if (roundNum < 2) attemptSave(pinIdx, roundNum + 1);
                     else attemptSave(pinIdx + 1, 0);
                 }, 15000);
@@ -8662,6 +8757,7 @@ function initTeachersManager() {
                     settled = true;
                     clearTimeout(timer);
                     try { delete window[cbName]; } catch (e) {}
+                    if (saveGen !== teachersSaveGen) return;
                     if (data && data.result === 'success') {
                         applySavedTeachers(Array.isArray(data.teachers) ? data.teachers : []);
                         finishSaveUi();
@@ -8699,6 +8795,7 @@ function initTeachersManager() {
                 params.set('authStream', stream);
                 params.set('stream', stream);
                 params.set('callback', cbName);
+                params.set('saveAt', saveAt);
                 params.set('teachers', JSON.stringify(teachers));
                 const scriptEl = document.createElement('script');
                 scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
@@ -8706,6 +8803,7 @@ function initTeachersManager() {
                     if (settled) return;
                     settled = true;
                     clearTimeout(timer);
+                    if (saveGen !== teachersSaveGen) return;
                     if (roundNum < 2) attemptSave(pinIdx, roundNum + 1);
                     else attemptSave(pinIdx + 1, 0);
                 };
