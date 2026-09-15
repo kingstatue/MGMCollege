@@ -24,11 +24,11 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
 
-  <link rel="stylesheet" href="styles.css?v=v32.50-admin-repair">
+  <link rel="stylesheet" href="styles.css?v=v32.53-stream-teachers">
   <script>
     // Auto-update after GitHub Pages deploy (runs before app.js) — does not touch attendance data
     (function () {
-      var EXPECTED = 'v32.50-admin-repair';
+      var EXPECTED = 'v32.53-stream-teachers';
       var KEY = 'mgm_shell_ver';
       var OWN_CACHE_PREFIX = 'mgm-absentee-informer';
       var reloading = false;
@@ -96,7 +96,7 @@
       // 2) Register SW with versioned URL so GitHub Pages cannot keep old sw.js forever
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          var swUrl = './sw.js?v=v121-admin-repair';
+          var swUrl = './sw.js?v=v124-stream-teachers';
           navigator.serviceWorker.register(swUrl, { updateViaCache: 'none' })
             .then(function (reg) {
               if (navigator.onLine) {
@@ -1098,12 +1098,12 @@
         </div>
         <div style="padding: 0 4px 8px;">
           <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px;">
-            Admin only: add each teacher’s name and set a memorable PIN (or tap Random), then Save to Server. Share each PIN privately. History will show who submitted.
+            Admin only: teachers for <strong id="teachersStreamLabel">BCA</strong> (current header stream). Switch stream in the header, then manage that stream’s teachers. Share each PIN privately.
           </p>
           <div class="form-group" style="display: flex; gap: 8px; align-items: flex-end; margin-bottom: 12px;">
             <div style="flex: 1;">
               <label for="newTeacherName">Teacher name</label>
-              <input type="text" id="newTeacherName" class="form-input" placeholder="e.g. Priya Rao" autocomplete="off">
+              <input type="text" id="newTeacherName" class="form-input" placeholder="e.g. kingstatue" autocomplete="off">
             </div>
             <button type="button" class="btn-primary" id="addTeacherBtn" style="white-space: nowrap;">Add teacher</button>
           </div>
@@ -1184,8 +1184,8 @@
 
   <datalist id="subjectDatalist"></datalist>
 
-  <script src="parser.js?v=v32.50-admin-repair"></script>
-  <script src="app.js?v=v32.50-admin-repair"></script>
+  <script src="parser.js?v=v32.53-stream-teachers"></script>
+  <script src="app.js?v=v32.53-stream-teachers"></script>
 <!-- Bulk Past Class Generator Modal -->
     <div class="modal-overlay" id="bulkGeneratorModal">
       <div class="modal-card" style="max-width: 460px;">
