@@ -195,9 +195,14 @@ function getAuthPayload() {
     }
     if (!pass) {
         try {
-            const dept = currentDept || localStorage.getItem('mgm_dept') || 'BSC';
+            const role = localStorage.getItem('mgm_role') || currentRole || 'TEACHER';
             const store = getPasscodeStore();
-            pass = (store.teacher && store.teacher[dept]) || (DEPT_CONFIG[dept] && DEPT_CONFIG[dept].passcode) || 'bsc2026';
+            if (role === 'ADMIN' && store.ADMIN) {
+                pass = String(store.ADMIN || '').trim();
+            } else {
+                const dept = currentDept || localStorage.getItem('mgm_dept') || 'BSC';
+                pass = (store.teacher && store.teacher[dept]) || (DEPT_CONFIG[dept] && DEPT_CONFIG[dept].passcode) || 'bsc2026';
+            }
             if (pass) sessionStorage.setItem('mgm_auth_pass', pass);
         } catch (e) {}
     }
@@ -7392,7 +7397,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v91_header_fix';
+    const APP_VER = 'v92_admin_sync';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
@@ -8480,6 +8485,13 @@ function initPasscodeManager() {
                 return;
             }
 
+            // Authorize with the PIN currently known to the server (before we switch session to newAdmin)
+            const oldAdminPass = String(
+                (getAuthPayload().authPasscode || '') ||
+                (getPasscodeStore().ADMIN || '') ||
+                ''
+            ).trim();
+
             const pins = [
                 passTeacher_BCA, passHOD_BCA, passTeacher_BCM, passHOD_BCM,
                 passTeacher_BA, passHOD_BA, passTeacher_BSC, passHOD_BSC
@@ -8511,13 +8523,18 @@ function initPasscodeManager() {
                 setAuthSession(newAdmin, 'ADMIN', currentDept || 'BCA', true);
             } catch (errAuth) {}
 
-            (function syncPasscodesToServer(storeObj) {
+            (function syncPasscodesToServer(storeObj, authPinForServer) {
                 const targetUrl = getWebhookUrl(currentDept);
                 if (!targetUrl || String(targetUrl).indexOf('YOUR_') !== -1) {
                     showCustomToast('Passcodes saved on phone', 'Sheet URL missing — update Script Properties manually if needed.');
                     return;
                 }
-                const payload = withAuth(Object.assign({ action: 'set_passcodes' }, storeObj));
+                const authPin = String(authPinForServer || storeObj.ADMIN || '').trim();
+                const payload = Object.assign({ action: 'set_passcodes' }, storeObj, {
+                    authPasscode: authPin,
+                    passcode: authPin,
+                    authRole: 'ADMIN'
+                });
                 submitViaHiddenForm(targetUrl, payload).catch(function () {});
                 const cbName = 'mgmPassSync_' + Date.now();
                 window[cbName] = function (data) {
@@ -8525,7 +8542,10 @@ function initPasscodeManager() {
                     if (data && data.result === 'success') {
                         showCustomToast('Passcodes saved', 'Updated on this device and Google Sheet server.');
                     } else {
-                        showCustomToast('Saved on phone', (data && data.message) || 'Server sync may have failed — check Script Properties.');
+                        showCustomToast(
+                            'Saved on phone only',
+                            (data && data.message) || 'Server still has the old admin PIN — open PINs again online, or set PASS_ADMIN in Script Properties.'
+                        );
                     }
                 };
                 const params = new URLSearchParams(Object.assign({
@@ -8533,9 +8553,9 @@ function initPasscodeManager() {
                     callback: cbName
                 }, storeObj));
                 appendAuthToParams(params);
-                // Prefer the new admin PIN for this auth call
-                params.set('authPasscode', newAdmin);
-                params.set('passcode', newAdmin);
+                // Must auth with the OLD server admin PIN when changing to a new one
+                params.set('authPasscode', authPin);
+                params.set('passcode', authPin);
                 params.set('authRole', 'ADMIN');
                 const scriptEl = document.createElement('script');
                 scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
@@ -8543,7 +8563,7 @@ function initPasscodeManager() {
                     showCustomToast('Saved on phone', 'Could not reach server — try Sync later or set Script Properties.');
                 };
                 document.body.appendChild(scriptEl);
-            })(updatedCustom);
+            })(updatedCustom, oldAdminPass || newAdmin);
 
             if (modal) modal.classList.remove('active');
             showCustomToast('PINs updated', 'Tell faculty the new stream PINs. Your admin PIN was updated too.');
