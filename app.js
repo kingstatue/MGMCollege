@@ -513,7 +513,11 @@ function authenticateWithServer(deptCode, passcode) {
                 });
                 return;
             }
-            // Server said no — still allow known local PIN for THIS stream only
+            // Server said no — allow local admin so user can open PINs and repair server sync
+            if (local.ok && local.role === 'ADMIN') {
+                settle(Object.assign({}, local, { serverUnsynced: true }));
+                return;
+            }
             if (local.ok) {
                 settle(local);
                 return;
@@ -5271,6 +5275,14 @@ function initDepartmentManager() {
                     teacherName: res.teacherName || '',
                     teacherId: res.teacherId || ''
                 });
+                if (res.serverUnsynced && (res.role || '') === 'ADMIN') {
+                    setTimeout(function () {
+                        showCustomToast(
+                            'Admin not synced to server',
+                            'Open PINs → Save while online (admin2026 can repair). Then save Teachers.'
+                        );
+                    }, 700);
+                }
                 return;
             }
             if (res && res.slow) {
@@ -7397,7 +7409,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v92_admin_sync';
+    const APP_VER = 'v93_admin_repair';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
@@ -8377,37 +8389,77 @@ function initTeachersManager() {
                 return;
             }
             setStatus('Saving to server…');
-            const payload = withAuth({
-                action: 'save_teachers',
-                teachers: teachers
+            const authPass = String(
+                (getAuthPayload().authPasscode || '') ||
+                (getPasscodeStore().ADMIN || '') ||
+                'admin2026'
+            ).trim();
+            const tryAuthPins = [];
+            [authPass, getPasscodeStore().ADMIN, 'admin2026'].forEach(function (p) {
+                const v = String(p || '').trim();
+                if (v && tryAuthPins.indexOf(v) === -1) tryAuthPins.push(v);
             });
-            submitViaHiddenForm(targetUrl, payload).catch(function () {});
 
-            const cbName = 'mgmTeachersSave_' + Date.now();
-            window[cbName] = function (data) {
-                try { delete window[cbName]; } catch (e) {}
-                if (data && data.result === 'success' && Array.isArray(data.teachers)) {
-                    teachers = data.teachers;
-                    saveCachedTeachers(teachers);
-                    renderTeachers();
-                    setStatus('Saved on server. Share each PIN privately with that teacher.');
-                    showCustomToast('Teachers saved', 'Personal PINs are live on the Google Sheet server.');
-                } else {
-                    setStatus((data && data.message) || 'Save may have failed — try again online.');
+            const attemptSave = (pinIdx) => {
+                if (pinIdx >= tryAuthPins.length) {
+                    setStatus('Server rejected admin PIN. Open PINs → Save online, or Sheet menu: Seed / Reset Server Passcodes.');
+                    showCustomToast('Teachers not on server', 'Fix admin PIN sync first (admin2026), then Save teachers again.');
+                    return;
                 }
+                const pin = tryAuthPins[pinIdx];
+                const payload = {
+                    action: 'save_teachers',
+                    teachers: teachers,
+                    authPasscode: pin,
+                    passcode: pin,
+                    authRole: 'ADMIN',
+                    authStream: currentDept || 'BCA'
+                };
+                submitViaHiddenForm(targetUrl, payload).catch(function () {});
+
+                const cbName = 'mgmTeachersSave_' + Date.now() + '_' + pinIdx;
+                let settled = false;
+                const timer = setTimeout(function () {
+                    if (settled) return;
+                    settled = true;
+                    try { delete window[cbName]; } catch (e) {}
+                    attemptSave(pinIdx + 1);
+                }, 7000);
+                window[cbName] = function (data) {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    try { delete window[cbName]; } catch (e) {}
+                    if (data && data.result === 'success' && Array.isArray(data.teachers)) {
+                        teachers = data.teachers;
+                        saveCachedTeachers(teachers);
+                        renderTeachers();
+                        setStatus('Saved on server. Share each PIN privately with that teacher.');
+                        showCustomToast('Teachers saved', 'Personal PINs are live on the Google Sheet server.');
+                        return;
+                    }
+                    attemptSave(pinIdx + 1);
+                };
+                // Auth FIRST so URL truncation cannot drop the PIN
+                const params = new URLSearchParams();
+                params.set('action', 'save_teachers');
+                params.set('authPasscode', pin);
+                params.set('passcode', pin);
+                params.set('authRole', 'ADMIN');
+                params.set('authStream', currentDept || 'BCA');
+                params.set('callback', cbName);
+                params.set('teachers', JSON.stringify(teachers));
+                const scriptEl = document.createElement('script');
+                scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+                scriptEl.onerror = function () {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    attemptSave(pinIdx + 1);
+                };
+                document.body.appendChild(scriptEl);
             };
-            const params = new URLSearchParams({
-                action: 'save_teachers',
-                callback: cbName,
-                teachers: JSON.stringify(teachers)
-            });
-            appendAuthToParams(params);
-            const scriptEl = document.createElement('script');
-            scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
-            scriptEl.onerror = function () {
-                setStatus('Network error while saving — cached on phone.');
-            };
-            document.body.appendChild(scriptEl);
+            attemptSave(0);
         });
     }
 }
@@ -8529,44 +8581,74 @@ function initPasscodeManager() {
                     showCustomToast('Passcodes saved on phone', 'Sheet URL missing — update Script Properties manually if needed.');
                     return;
                 }
-                const authPin = String(authPinForServer || storeObj.ADMIN || '').trim();
-                const payload = Object.assign({ action: 'set_passcodes' }, storeObj, {
-                    authPasscode: authPin,
-                    passcode: authPin,
-                    authRole: 'ADMIN'
-                });
-                submitViaHiddenForm(targetUrl, payload).catch(function () {});
-                const cbName = 'mgmPassSync_' + Date.now();
-                window[cbName] = function (data) {
-                    try { delete window[cbName]; } catch (err) {}
-                    if (data && data.result === 'success') {
-                        showCustomToast('Passcodes saved', 'Updated on this device and Google Sheet server.');
-                    } else {
+
+                const tryPins = [];
+                const pushPin = (p) => {
+                    const v = String(p || '').trim();
+                    if (v && tryPins.indexOf(v) === -1) tryPins.push(v);
+                };
+                pushPin(authPinForServer);
+                pushPin(storeObj.ADMIN);
+                pushPin('admin2026');
+
+                const runAttempt = (idx) => {
+                    if (idx >= tryPins.length) {
                         showCustomToast(
                             'Saved on phone only',
-                            (data && data.message) || 'Server still has the old admin PIN — open PINs again online, or set PASS_ADMIN in Script Properties.'
+                            'Server still rejected admin PIN. In Google Sheet menu: MGM Attendance System → Seed / Reset Server Passcodes, then login with admin2026 and Save PINs again.'
                         );
+                        return;
                     }
+                    const authPin = tryPins[idx];
+                    const payload = Object.assign({ action: 'set_passcodes' }, storeObj, {
+                        authPasscode: authPin,
+                        passcode: authPin,
+                        authRole: 'ADMIN'
+                    });
+                    submitViaHiddenForm(targetUrl, payload).catch(function () {});
+                    const cbName = 'mgmPassSync_' + Date.now() + '_' + idx;
+                    let settled = false;
+                    const timer = setTimeout(function () {
+                        if (settled) return;
+                        settled = true;
+                        try { delete window[cbName]; } catch (err) {}
+                        runAttempt(idx + 1);
+                    }, 6000);
+                    window[cbName] = function (data) {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeout(timer);
+                        try { delete window[cbName]; } catch (err) {}
+                        if (data && data.result === 'success') {
+                            showCustomToast('Passcodes saved', 'Updated on this device and Google Sheet server.');
+                            return;
+                        }
+                        runAttempt(idx + 1);
+                    };
+                    const params = new URLSearchParams();
+                    params.set('action', 'set_passcodes');
+                    params.set('authPasscode', authPin);
+                    params.set('passcode', authPin);
+                    params.set('authRole', 'ADMIN');
+                    params.set('callback', cbName);
+                    Object.keys(storeObj).forEach(function (k) {
+                        params.set(k, storeObj[k]);
+                    });
+                    const scriptEl = document.createElement('script');
+                    scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+                    scriptEl.onerror = function () {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeout(timer);
+                        runAttempt(idx + 1);
+                    };
+                    document.body.appendChild(scriptEl);
                 };
-                const params = new URLSearchParams(Object.assign({
-                    action: 'set_passcodes',
-                    callback: cbName
-                }, storeObj));
-                appendAuthToParams(params);
-                // Must auth with the OLD server admin PIN when changing to a new one
-                params.set('authPasscode', authPin);
-                params.set('passcode', authPin);
-                params.set('authRole', 'ADMIN');
-                const scriptEl = document.createElement('script');
-                scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
-                scriptEl.onerror = function () {
-                    showCustomToast('Saved on phone', 'Could not reach server — try Sync later or set Script Properties.');
-                };
-                document.body.appendChild(scriptEl);
+                runAttempt(0);
             })(updatedCustom, oldAdminPass || newAdmin);
 
             if (modal) modal.classList.remove('active');
-            showCustomToast('PINs updated', 'Tell faculty the new stream PINs. Your admin PIN was updated too.');
+            showCustomToast('Saving PINs…', 'Wait for “Passcodes saved” confirmation from the server.');
         });
     }
 
