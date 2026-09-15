@@ -215,7 +215,7 @@ function getAuthPayload() {
     };
 }
 
-function setAuthSession(passcode, role, deptCode, remember) {
+function setAuthSession(passcode, role, deptCode, remember, teacherMeta) {
     const pass = (passcode || '').trim();
     try { sessionStorage.setItem('mgm_auth_pass', pass); } catch (e) {}
     // Always persist session passcode, stream, and logged-in state in localStorage so session survives app close/reopen
@@ -231,6 +231,56 @@ function setAuthSession(passcode, role, deptCode, remember) {
         currentRole = role;
         try { localStorage.setItem('mgm_role', role); } catch (e) {}
     }
+    const meta = teacherMeta || {};
+    const tName = String(meta.teacherName || '').trim();
+    const tId = String(meta.teacherId || '').trim();
+    if (tName) {
+        try { localStorage.setItem('mgm_teacher_name', tName); } catch (e) {}
+    } else {
+        try { localStorage.removeItem('mgm_teacher_name'); } catch (e) {}
+    }
+    if (tId) {
+        try { localStorage.setItem('mgm_teacher_id', tId); } catch (e) {}
+    } else {
+        try { localStorage.removeItem('mgm_teacher_id'); } catch (e) {}
+    }
+}
+
+function getSessionTeacherName() {
+    try {
+        return String(localStorage.getItem('mgm_teacher_name') || '').trim();
+    } catch (e) {
+        return '';
+    }
+}
+
+function loadCachedTeachers() {
+    try {
+        const raw = localStorage.getItem('mgm_teachers_cache') || '[]';
+        const list = JSON.parse(raw);
+        return Array.isArray(list) ? list : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveCachedTeachers(list) {
+    try {
+        localStorage.setItem('mgm_teachers_cache', JSON.stringify(Array.isArray(list) ? list : []));
+    } catch (e) {}
+}
+
+function findCachedTeacherByPin(passcode) {
+    const want = String(passcode || '').trim().toLowerCase().replace(/[\s\.\-_]/g, '');
+    if (!want) return null;
+    const list = loadCachedTeachers();
+    for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        if (!t || t.disabled) continue;
+        const pin = String(t.pin || '').trim().toLowerCase().replace(/[\s\.\-_]/g, '');
+        if (pin && pin === want) return t;
+    }
+    return null;
 }
 
 function clearAuthSession() {
@@ -242,6 +292,8 @@ function clearAuthSession() {
     try { localStorage.removeItem('mgm_is_logged_in'); } catch (e) {}
     try { localStorage.removeItem('mgm_dept'); } catch (e) {}
     try { localStorage.removeItem('mgm_role'); } catch (e) {}
+    try { localStorage.removeItem('mgm_teacher_name'); } catch (e) {}
+    try { localStorage.removeItem('mgm_teacher_id'); } catch (e) {}
 }
 
 function restoreAuthSessionFromRemember() {
@@ -334,7 +386,21 @@ function authenticateWithServer(deptCode, passcode) {
                 const adminPass = String(store.ADMIN || 'admin2026').toLowerCase().replace(/[\s\.\-_]/g, '');
                 // Admin only with real admin PIN — not bare "admin"
                 if (pClean === adminPass) {
-                    return { ok: true, role: 'ADMIN', stream: stream, offline: true };
+                    return { ok: true, role: 'ADMIN', stream: stream, offline: true, teacherName: 'Admin' };
+                }
+
+                // Personal teacher PIN (cached from last admin sync / prior login)
+                const cachedTeacher = findCachedTeacherByPin(pass);
+                if (cachedTeacher) {
+                    return {
+                        ok: true,
+                        role: 'TEACHER',
+                        stream: stream,
+                        offline: true,
+                        teacherId: cachedTeacher.id || '',
+                        teacherName: cachedTeacher.name || 'Teacher',
+                        personalPin: true
+                    };
                 }
 
                 // Selected stream only — wrong stream PIN must fail (old login behaviour)
@@ -410,8 +476,11 @@ function authenticateWithServer(deptCode, passcode) {
             if (data && data.result === 'success') {
                 const role = data.role || 'TEACHER';
                 const serverStream = String(data.stream || stream).toUpperCase().replace('BCOM', 'BCM');
-                // Never auto-switch streams: PIN must match the card selected on login
-                if (role !== 'ADMIN' && (data.matchedOtherStream || serverStream !== stream)) {
+                const teacherName = String(data.teacherName || '').trim();
+                const teacherId = String(data.teacherId || '').trim();
+                const personalPin = !!(teacherId || (teacherName && role === 'TEACHER' && teacherName.indexOf('(stream PIN)') === -1 && teacherName !== 'HOD'));
+                // Stream PINs stay locked to the selected card; personal teacher PINs work on any stream card
+                if (role !== 'ADMIN' && !personalPin && (data.matchedOtherStream || serverStream !== stream)) {
                     settle({
                         ok: false,
                         wrongStream: true,
@@ -419,10 +488,23 @@ function authenticateWithServer(deptCode, passcode) {
                     });
                     return;
                 }
+                if (teacherId || teacherName) {
+                    try {
+                        const cache = loadCachedTeachers();
+                        if (teacherId && teacherName) {
+                            const without = cache.filter(t => String(t.id || '') !== teacherId);
+                            without.push({ id: teacherId, name: teacherName, pin: pass, disabled: false });
+                            saveCachedTeachers(without);
+                        }
+                    } catch (eCache) {}
+                }
                 settle({
                     ok: true,
                     role: role,
-                    stream: role === 'ADMIN' ? stream : serverStream
+                    stream: role === 'ADMIN' ? stream : stream,
+                    teacherId: teacherId,
+                    teacherName: teacherName || (role === 'ADMIN' ? 'Admin' : ''),
+                    personalPin: personalPin
                 });
                 return;
             }
@@ -2349,12 +2431,15 @@ async function submitData(dateVal, rollNumbersRaw, yearVal, sectionVal, subjectV
     const networkOff = (typeof navigator !== 'undefined' && navigator.onLine === false);
     const targetUrl = getWebhookUrl(currentDept);
 
+    const actorName = getSessionTeacherName() || (currentRole === 'ADMIN' ? 'Admin' : '');
     const recordPayload = {
         ...payload,
         offline: networkOff,
         syncNote: networkOff ? 'Pending Sync' : '',
         bulkPast: !!(editOrig && isBulkPastEntry(editOrig)),
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        submittedBy: isUpdate ? (editOrig && editOrig.submittedBy) || actorName : actorName,
+        editedBy: isUpdate ? actorName : ''
     };
 
     try {
@@ -3142,7 +3227,9 @@ function mapServerHistoryEntry(e, stream, fallbackDate) {
         rollNumbers: e.rollNumbers || 'NIL',
         offline: false,
         syncNote: '',
-        timestamp: resolveHistoryTimestamp(e.timestamp || e.time || e.submittedAt || '', null)
+        timestamp: resolveHistoryTimestamp(e.timestamp || e.time || e.submittedAt || '', null),
+        submittedBy: e.submittedBy || e.SubmittedBy || '',
+        editedBy: e.editedBy || e.EditedBy || ''
     };
 }
 
@@ -3966,6 +4053,13 @@ function renderHistoryList() {
                 '<span>Slot ' + slotNum + ': <strong>' + slotLabel + '</strong></span>' +
             '</div>' +
             '<div class="history-rolls">Absentees: ' + rolls + '</div>' +
+            ((item.submittedBy || item.editedBy)
+                ? ('<div style="margin-top: 4px; font-size: 0.72rem; color: var(--text-muted, #94a3b8);">' +
+                    (item.submittedBy ? ('Submitted by <strong>' + escapeHTML(String(item.submittedBy)) + '</strong>') : '') +
+                    (item.submittedBy && item.editedBy ? ' · ' : '') +
+                    (item.editedBy ? ('Edited by <strong>' + escapeHTML(String(item.editedBy)) + '</strong>') : '') +
+                   '</div>')
+                : '') +
             '<div style="margin-top: 6px; display: flex; justify-content: space-between; align-items: center;">' +
                 statusBadge +
                 '<div style="display: flex; gap: 6px;">' +
@@ -5102,13 +5196,13 @@ function initDepartmentManager() {
         }
     };
 
-    const finishLoginSuccess = (role, loginDept, passcode, rememberChecked) => {
+    const finishLoginSuccess = (role, loginDept, passcode, rememberChecked, teacherMeta) => {
         selectedDept = loginDept;
         document.querySelectorAll('.dept-card').forEach(c => {
             c.classList.toggle('active', c.getAttribute('data-dept') === loginDept);
         });
 
-        setAuthSession(passcode, role || 'TEACHER', loginDept, !!rememberChecked);
+        setAuthSession(passcode, role || 'TEACHER', loginDept, !!rememberChecked, teacherMeta || {});
         subjectsAuthPrompted = false;
         // Parent Informer needs no separate HOD login — stream PIN unlocks both tabs
         isHODAuthenticated = true;
@@ -5126,6 +5220,20 @@ function initDepartmentManager() {
         const cancelBtn = document.getElementById('cancelHODLoginBtn');
         if (cancelBtn) cancelBtn.style.display = 'none';
         setLoginBusy(false);
+
+        if ((role || '') === 'ADMIN') {
+            try {
+                const adm = String((getPasscodeStore().ADMIN || '')).toLowerCase().replace(/[\s\.\-_]/g, '');
+                if (adm === 'admin2026' || adm === 'admin') {
+                    setTimeout(() => {
+                        showCustomToast(
+                            'Set up personal teacher PINs',
+                            'Tap Teachers in the header — add each teacher name and Generate PIN. Stream PINs still work during transition.'
+                        );
+                    }, 600);
+                }
+            } catch (eHint) {}
+        }
     };
 
     const runLogin = async () => {
@@ -5154,7 +5262,10 @@ function initDepartmentManager() {
                 // Stay on the stream card the user selected (no auto-switch)
                 const loginStream = selectedDept;
                 syncLocalPasscodeFromLogin(loginStream, res.role || 'TEACHER', pass);
-                finishLoginSuccess(res.role || 'TEACHER', loginStream, pass, remember);
+                finishLoginSuccess(res.role || 'TEACHER', loginStream, pass, remember, {
+                    teacherName: res.teacherName || '',
+                    teacherId: res.teacherId || ''
+                });
                 return;
             }
             if (res && res.slow) {
@@ -5273,6 +5384,12 @@ function initDepartmentManager() {
                         localStorage.setItem('mgm_role', currentRole);
                         applyRoleUI();
                     }
+                    if (res.teacherName || res.teacherId) {
+                        setAuthSession(rememberedPass, currentRole, savedDept, true, {
+                            teacherName: res.teacherName || '',
+                            teacherId: res.teacherId || ''
+                        });
+                    }
                     return;
                 }
                 if (res && !res.offline && !res.slow) {
@@ -5301,9 +5418,16 @@ function applyRoleUI() {
     const hodStreamSelect = document.getElementById('hodStreamSelect');
     const hodFetchBtnText = document.getElementById('hodFetchBtnText');
     const deptNameShort = currentDept === 'BCM' ? 'B.Com' : (currentDept === 'BA' ? 'B.A.' : (currentDept === 'BSC' ? 'B.Sc.' : currentDept));
+    const isAdmin = currentRole === 'ADMIN';
 
-    if (currentRole === 'ADMIN') {
+    ['adminPasscodeSettingsBtn', 'adminTeachersBtn', 'hodPasscodeSettingsBtn', 'loginPasscodeSettingsBtn'].forEach((id) => {
+        const btn = document.getElementById(id);
+        if (btn) btn.style.display = isAdmin ? '' : 'none';
+    });
+
+    if (isAdmin) {
         if (hodRoleBadge) {
+            hodRoleBadge.style.display = '';
             hodRoleBadge.className = 'badge badge-warning';
             hodRoleBadge.textContent = '👑 Super Admin Mode';
         }
@@ -6616,6 +6740,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     initDepartmentManager();
     initSubjectManager();
+    initTeachersManager();
     initPasscodeManager();
     initThemeToggle();
 
@@ -7267,7 +7392,7 @@ function initSubjectManager() {
 
 // Version upgrade check to purge stale cached cloud subjects on GitHub Pages update
 (function checkAppCacheVersion() {
-    const APP_VER = 'v88_light_hist_groups';
+    const APP_VER = 'v89_personal_pins';
     const OWN_CACHE_PREFIX = 'mgm-absentee-informer';
     if (localStorage.getItem('mgm_app_ver') !== APP_VER) {
         localStorage.removeItem('mgm_cloud_subjects');
@@ -8095,9 +8220,195 @@ function formatDateDisplay(dateStr) {
     return dateStr;
 }
 
+
+function initTeachersManager() {
+    const openBtn = document.getElementById('adminTeachersBtn');
+    const modal = document.getElementById('teachersManageModal');
+    const closeBtn = document.getElementById('closeTeachersModalBtn');
+    const listEl = document.getElementById('teachersList');
+    const nameInput = document.getElementById('newTeacherName');
+    const addBtn = document.getElementById('addTeacherBtn');
+    const saveBtn = document.getElementById('saveTeachersBtn');
+    const statusEl = document.getElementById('teachersStatus');
+
+    let teachers = loadCachedTeachers();
+
+    const setStatus = (msg) => {
+        if (statusEl) statusEl.textContent = msg || '';
+    };
+
+    const renderTeachers = () => {
+        if (!listEl) return;
+        if (!teachers.length) {
+            listEl.innerHTML = '<p style="font-size: 0.8rem; color: var(--text-muted);">No teachers yet. Add a name and tap Generate PIN.</p>';
+            return;
+        }
+        listEl.innerHTML = teachers.map((t, idx) => {
+            const disabled = !!t.disabled;
+            return (
+                '<div class="teacher-row" data-idx="' + idx + '" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; padding:10px; border:1px solid rgba(148,163,184,0.25); border-radius:10px;">' +
+                    '<input type="text" class="form-input teacher-name" value="' + escapeHTML(String(t.name || '')) + '" style="flex:1; min-width:120px;" />' +
+                    '<input type="text" class="form-input teacher-pin" value="' + escapeHTML(String(t.pin || '')) + '" style="width:110px; font-family:monospace;" readonly />' +
+                    '<button type="button" class="btn-secondary teacher-regen" style="padding:8px 10px; font-size:0.75rem;">New PIN</button>' +
+                    '<label style="font-size:0.75rem; display:flex; align-items:center; gap:4px;"><input type="checkbox" class="teacher-disabled" ' + (disabled ? 'checked' : '') + '> Off</label>' +
+                    '<button type="button" class="btn-secondary teacher-remove" style="padding:8px 10px; font-size:0.75rem; color:#f87171;">Remove</button>' +
+                '</div>'
+            );
+        }).join('');
+
+        listEl.querySelectorAll('.teacher-row').forEach((row) => {
+            const idx = parseInt(row.getAttribute('data-idx'), 10);
+            const nameEl = row.querySelector('.teacher-name');
+            const pinEl = row.querySelector('.teacher-pin');
+            const disEl = row.querySelector('.teacher-disabled');
+            if (nameEl) nameEl.addEventListener('change', () => { teachers[idx].name = nameEl.value.trim(); });
+            if (disEl) disEl.addEventListener('change', () => { teachers[idx].disabled = !!disEl.checked; });
+            const regen = row.querySelector('.teacher-regen');
+            if (regen) regen.addEventListener('click', () => {
+                const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+                let pin = '';
+                for (let i = 0; i < 6; i++) pin += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+                teachers[idx].pin = pin;
+                if (pinEl) pinEl.value = pin;
+            });
+            const rem = row.querySelector('.teacher-remove');
+            if (rem) rem.addEventListener('click', () => {
+                teachers.splice(idx, 1);
+                renderTeachers();
+            });
+        });
+    };
+
+    const fetchTeachersFromServer = () => {
+        const targetUrl = getWebhookUrl(currentDept);
+        if (!targetUrl || String(targetUrl).indexOf('YOUR_') !== -1) {
+            teachers = loadCachedTeachers();
+            renderTeachers();
+            setStatus('Offline cache — connect to load server list.');
+            return;
+        }
+        setStatus('Loading teachers…');
+        const cbName = 'mgmTeachersList_' + Date.now();
+        window[cbName] = function (data) {
+            try { delete window[cbName]; } catch (e) {}
+            if (data && data.result === 'success' && Array.isArray(data.teachers)) {
+                teachers = data.teachers;
+                saveCachedTeachers(teachers);
+                renderTeachers();
+                setStatus(teachers.length + ' teacher(s) loaded.');
+            } else {
+                teachers = loadCachedTeachers();
+                renderTeachers();
+                setStatus((data && data.message) || 'Could not load teachers — showing cache.');
+            }
+        };
+        const params = new URLSearchParams({ action: 'list_teachers', callback: cbName });
+        appendAuthToParams(params);
+        const scriptEl = document.createElement('script');
+        scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+        scriptEl.onerror = function () {
+            teachers = loadCachedTeachers();
+            renderTeachers();
+            setStatus('Network error — showing cached teachers.');
+        };
+        document.body.appendChild(scriptEl);
+    };
+
+    const openModal = (e) => {
+        if (e) e.preventDefault();
+        if (currentRole !== 'ADMIN') {
+            showCustomToast('Admin only', 'Manage Teachers requires Super Admin login.');
+            return;
+        }
+        if (modal) modal.classList.add('active');
+        fetchTeachersFromServer();
+    };
+
+    if (openBtn) openBtn.addEventListener('click', openModal);
+    if (closeBtn && modal) closeBtn.addEventListener('click', () => modal.classList.remove('active'));
+
+    if (addBtn) {
+        addBtn.addEventListener('click', () => {
+            const name = nameInput ? String(nameInput.value || '').trim() : '';
+            if (!name) {
+                if (nameInput) nameInput.focus();
+                setStatus('Enter a teacher name first.');
+                return;
+            }
+            const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+            let pin = '';
+            for (let i = 0; i < 6; i++) pin += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+            teachers.push({ id: '', name: name, pin: pin, disabled: false });
+            if (nameInput) nameInput.value = '';
+            renderTeachers();
+            setStatus('Added ' + name + ' — tap Save to Server.');
+        });
+    }
+
+    if (saveBtn) {
+        saveBtn.addEventListener('click', () => {
+            if (currentRole !== 'ADMIN') return;
+            // Collect latest from DOM
+            if (listEl) {
+                listEl.querySelectorAll('.teacher-row').forEach((row) => {
+                    const idx = parseInt(row.getAttribute('data-idx'), 10);
+                    if (!teachers[idx]) return;
+                    const nameEl = row.querySelector('.teacher-name');
+                    const pinEl = row.querySelector('.teacher-pin');
+                    const disEl = row.querySelector('.teacher-disabled');
+                    if (nameEl) teachers[idx].name = nameEl.value.trim();
+                    if (pinEl) teachers[idx].pin = pinEl.value.trim();
+                    if (disEl) teachers[idx].disabled = !!disEl.checked;
+                });
+            }
+            teachers = teachers.filter(t => t && String(t.name || '').trim());
+            saveCachedTeachers(teachers);
+
+            const targetUrl = getWebhookUrl(currentDept);
+            if (!targetUrl || String(targetUrl).indexOf('YOUR_') !== -1) {
+                setStatus('Saved on this phone only (no sheet URL).');
+                return;
+            }
+            setStatus('Saving to server…');
+            const payload = withAuth({
+                action: 'save_teachers',
+                teachers: teachers
+            });
+            submitViaHiddenForm(targetUrl, payload).catch(function () {});
+
+            const cbName = 'mgmTeachersSave_' + Date.now();
+            window[cbName] = function (data) {
+                try { delete window[cbName]; } catch (e) {}
+                if (data && data.result === 'success' && Array.isArray(data.teachers)) {
+                    teachers = data.teachers;
+                    saveCachedTeachers(teachers);
+                    renderTeachers();
+                    setStatus('Saved on server. Share each PIN privately with that teacher.');
+                    showCustomToast('Teachers saved', 'Personal PINs are live on the Google Sheet server.');
+                } else {
+                    setStatus((data && data.message) || 'Save may have failed — try again online.');
+                }
+            };
+            const params = new URLSearchParams({
+                action: 'save_teachers',
+                callback: cbName,
+                teachers: JSON.stringify(teachers)
+            });
+            appendAuthToParams(params);
+            const scriptEl = document.createElement('script');
+            scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+            scriptEl.onerror = function () {
+                setStatus('Network error while saving — cached on phone.');
+            };
+            document.body.appendChild(scriptEl);
+        });
+    }
+}
+
 function initPasscodeManager() {
     const loginBtn = document.getElementById('loginPasscodeSettingsBtn');
     const hodBtn = document.getElementById('hodPasscodeSettingsBtn');
+    const adminBtn = document.getElementById('adminPasscodeSettingsBtn');
     const modal = document.getElementById('passcodeSettingsModal');
     const closeBtn = document.getElementById('closePasscodeModalBtn');
     const form = document.getElementById('passcodeSettingsForm');
@@ -8118,81 +8429,92 @@ function initPasscodeManager() {
 
     const openPasscodeModal = (e) => {
         if (e) e.preventDefault();
+        if (currentRole !== 'ADMIN') {
+            showCustomToast('Admin only', 'Manage Passcodes is available after Super Admin login.');
+            return;
+        }
         const store = getPasscodeStore();
 
         if (passTeacher_BCA) passTeacher_BCA.value = store.teacher.BCA;
         if (passHOD_BCA) passHOD_BCA.value = store.hod.BCA;
-        
         if (passTeacher_BCM) passTeacher_BCM.value = store.teacher.BCM;
         if (passHOD_BCM) passHOD_BCM.value = store.hod.BCM;
-
         if (passTeacher_BA) passTeacher_BA.value = store.teacher.BA;
         if (passHOD_BA) passHOD_BA.value = store.hod.BA;
-
         if (passTeacher_BSC) passTeacher_BSC.value = store.teacher.BSC;
         if (passHOD_BSC) passHOD_BSC.value = store.hod.BSC;
-
         if (passADMIN) passADMIN.value = store.ADMIN;
 
-        const groupBCA = document.getElementById('group_BCA');
-        const groupBCM = document.getElementById('group_BCM');
-        const groupBA = document.getElementById('group_BA');
-        const groupBSC = document.getElementById('group_BSC');
-        const groupADMIN = document.getElementById('groupADMIN');
+        ['group_BCA', 'group_BCM', 'group_BA', 'group_BSC', 'groupADMIN'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'block';
+        });
 
-        const deptLabel = currentDept === 'BCM' ? 'B.Com' : (currentDept === 'BA' ? 'B.A.' : (currentDept === 'BSC' ? 'B.Sc.' : currentDept));
-
-        if (currentRole === 'ADMIN') {
-            if (titleEl) titleEl.textContent = 'Manage All Department & Admin Passcodes';
-            if (subtitleEl) subtitleEl.textContent = 'Super Admin mode: Update Teacher & Parent Informer passcodes for all departments or the Master Admin passcode.';
-
-            if (groupBCA) groupBCA.style.display = 'block';
-            if (groupBCM) groupBCM.style.display = 'block';
-            if (groupBA) groupBA.style.display = 'block';
-            if (groupBSC) groupBSC.style.display = 'block';
-            if (groupADMIN) groupADMIN.style.display = 'block';
-        } else {
-            if (titleEl) titleEl.textContent = 'Change ' + deptLabel + ' Passcodes';
-            if (subtitleEl) subtitleEl.textContent = 'Update Teacher & Parent Informer passcodes for ' + deptLabel + ' department.';
-
-            if (groupBCA) groupBCA.style.display = currentDept === 'BCA' ? 'block' : 'none';
-            if (groupBCM) groupBCM.style.display = currentDept === 'BCM' ? 'block' : 'none';
-            if (groupBA) groupBA.style.display = currentDept === 'BA' ? 'block' : 'none';
-            if (groupBSC) groupBSC.style.display = currentDept === 'BSC' ? 'block' : 'none';
-            if (groupADMIN) groupADMIN.style.display = 'none';
+        if (titleEl) titleEl.textContent = 'Manage All Passcodes (Admin)';
+        if (subtitleEl) {
+            subtitleEl.textContent = 'Change stream PINs and your own admin PIN. Use secrets faculty only know — not bca2026-style names.';
         }
 
         if (modal) modal.classList.add('active');
     };
 
-    if (loginBtn) loginBtn.addEventListener('click', openPasscodeModal);
-    if (hodBtn) hodBtn.addEventListener('click', openPasscodeModal);
+    [loginBtn, hodBtn, adminBtn].forEach((btn) => {
+        if (btn) btn.addEventListener('click', openPasscodeModal);
+    });
     if (closeBtn && modal) closeBtn.addEventListener('click', () => modal.classList.remove('active'));
 
     if (form) {
         form.addEventListener('submit', (e) => {
             e.preventDefault();
-            const store = getPasscodeStore();
+            if (currentRole !== 'ADMIN') {
+                alert('Only Super Admin can change passcodes.');
+                return;
+            }
+
+            const newAdmin = passADMIN ? String(passADMIN.value || '').trim() : '';
+            if (!newAdmin || newAdmin.length < 6) {
+                alert('Admin PIN must be at least 6 characters.');
+                if (passADMIN) passADMIN.focus();
+                return;
+            }
+
+            const pins = [
+                passTeacher_BCA, passHOD_BCA, passTeacher_BCM, passHOD_BCM,
+                passTeacher_BA, passHOD_BA, passTeacher_BSC, passHOD_BSC
+            ];
+            for (let i = 0; i < pins.length; i++) {
+                const v = pins[i] ? String(pins[i].value || '').trim() : '';
+                if (!v || v.length < 4) {
+                    alert('Every stream PIN must be at least 4 characters. Prefer 8+ secret characters.');
+                    if (pins[i]) pins[i].focus();
+                    return;
+                }
+            }
+
             const updatedCustom = {
-                teacherBCA: (currentRole === 'ADMIN' || currentDept === 'BCA') ? (passTeacher_BCA ? passTeacher_BCA.value.trim() : store.teacher.BCA) : store.teacher.BCA,
-                hodBCA: (currentRole === 'ADMIN' || currentDept === 'BCA') ? (passHOD_BCA ? passHOD_BCA.value.trim() : store.hod.BCA) : store.hod.BCA,
-
-                teacherBCM: (currentRole === 'ADMIN' || currentDept === 'BCM') ? (passTeacher_BCM ? passTeacher_BCM.value.trim() : store.teacher.BCM) : store.teacher.BCM,
-                hodBCM: (currentRole === 'ADMIN' || currentDept === 'BCM') ? (passHOD_BCM ? passHOD_BCM.value.trim() : store.hod.BCM) : store.hod.BCM,
-
-                teacherBA: (currentRole === 'ADMIN' || currentDept === 'BA') ? (passTeacher_BA ? passTeacher_BA.value.trim() : store.teacher.BA) : store.teacher.BA,
-                hodBA: (currentRole === 'ADMIN' || currentDept === 'BA') ? (passHOD_BA ? passHOD_BA.value.trim() : store.hod.BA) : store.hod.BA,
-
-                teacherBSC: (currentRole === 'ADMIN' || currentDept === 'BSC') ? (passTeacher_BSC ? passTeacher_BSC.value.trim() : store.teacher.BSC) : store.teacher.BSC,
-                hodBSC: (currentRole === 'ADMIN' || currentDept === 'BSC') ? (passHOD_BSC ? passHOD_BSC.value.trim() : store.hod.BSC) : store.hod.BSC,
-
-                ADMIN: currentRole === 'ADMIN' ? (passADMIN ? passADMIN.value.trim() : store.ADMIN) : store.ADMIN
+                teacherBCA: passTeacher_BCA.value.trim(),
+                hodBCA: passHOD_BCA.value.trim(),
+                teacherBCM: passTeacher_BCM.value.trim(),
+                hodBCM: passHOD_BCM.value.trim(),
+                teacherBA: passTeacher_BA.value.trim(),
+                hodBA: passHOD_BA.value.trim(),
+                teacherBSC: passTeacher_BSC.value.trim(),
+                hodBSC: passHOD_BSC.value.trim(),
+                ADMIN: newAdmin
             };
             savePasscodeStore(updatedCustom);
 
-            // Push to Apps Script Script Properties (ADMIN required on server)
+            // Keep admin session on the new admin PIN (self-login change)
+            try {
+                setAuthSession(newAdmin, 'ADMIN', currentDept || 'BCA', true);
+            } catch (errAuth) {}
+
             (function syncPasscodesToServer(storeObj) {
                 const targetUrl = getWebhookUrl(currentDept);
+                if (!targetUrl || String(targetUrl).indexOf('YOUR_') !== -1) {
+                    showCustomToast('Passcodes saved on phone', 'Sheet URL missing — update Script Properties manually if needed.');
+                    return;
+                }
                 const payload = withAuth(Object.assign({ action: 'set_passcodes' }, storeObj));
                 submitViaHiddenForm(targetUrl, payload).catch(function () {});
                 const cbName = 'mgmPassSync_' + Date.now();
@@ -8200,6 +8522,8 @@ function initPasscodeManager() {
                     try { delete window[cbName]; } catch (err) {}
                     if (data && data.result === 'success') {
                         showCustomToast('Passcodes saved', 'Updated on this device and Google Sheet server.');
+                    } else {
+                        showCustomToast('Saved on phone', (data && data.message) || 'Server sync may have failed — check Script Properties.');
                     }
                 };
                 const params = new URLSearchParams(Object.assign({
@@ -8207,37 +8531,42 @@ function initPasscodeManager() {
                     callback: cbName
                 }, storeObj));
                 appendAuthToParams(params);
+                // Prefer the new admin PIN for this auth call
+                params.set('authPasscode', newAdmin);
+                params.set('passcode', newAdmin);
+                params.set('authRole', 'ADMIN');
                 const scriptEl = document.createElement('script');
                 scriptEl.src = targetUrl + (targetUrl.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+                scriptEl.onerror = function () {
+                    showCustomToast('Saved on phone', 'Could not reach server — try Sync later or set Script Properties.');
+                };
                 document.body.appendChild(scriptEl);
             })(updatedCustom);
 
             if (modal) modal.classList.remove('active');
-            if (currentRole !== 'ADMIN') {
-                alert('Passcodes updated on this device. Super Admin should save once so Google Sheet server passcodes stay in sync.');
-            }
+            showCustomToast('PINs updated', 'Tell faculty the new stream PINs. Your admin PIN was updated too.');
         });
     }
 
     if (resetBtn) {
         resetBtn.addEventListener('click', () => {
-            if (confirm('Reset Teacher & Parent Informer passcodes to defaults?')) {
+            if (currentRole !== 'ADMIN') {
+                alert('Only Super Admin can reset passcodes.');
+                return;
+            }
+            if (confirm('Reset all passcodes to factory defaults (guessable)? Only use if you will set new secrets immediately.')) {
                 localStorage.removeItem('mgm_custom_passcodes');
                 const store = getPasscodeStore();
                 if (passTeacher_BCA) passTeacher_BCA.value = store.teacher.BCA;
                 if (passHOD_BCA) passHOD_BCA.value = store.hod.BCA;
-
                 if (passTeacher_BCM) passTeacher_BCM.value = store.teacher.BCM;
                 if (passHOD_BCM) passHOD_BCM.value = store.hod.BCM;
-
                 if (passTeacher_BA) passTeacher_BA.value = store.teacher.BA;
                 if (passHOD_BA) passHOD_BA.value = store.hod.BA;
-
                 if (passTeacher_BSC) passTeacher_BSC.value = store.teacher.BSC;
                 if (passHOD_BSC) passHOD_BSC.value = store.hod.BSC;
-
                 if (passADMIN) passADMIN.value = store.ADMIN;
-                alert('Passcodes reset to default!');
+                alert('Defaults loaded in the form — change them to secrets, then Save.');
             }
         });
     }
